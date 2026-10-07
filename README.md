@@ -1,141 +1,212 @@
-# edge-python-template
+# PUDA GUI Driver
 
-Template for a machine edge service in Python (PUDA CLI **v0.1.2**, Python SDK **0.0.18**). Use this to scaffold a new machine integration.
+A PUDA edge service that integrates **any desktop instrument software** into PUDA without a hardware SDK. Instead of a vendor SDK, it uses:
+
+| Layer | Technology | Role |
+|---|---|---|
+| GUI automation | [Hermes computer use](https://hermes-agent.nousresearch.com/docs/user-guide/features/computer-use) → `cua-driver` MCP | Background click / type / key dispatch, no focus steal |
+| Vision reading | Claude vision via Hermes model config | Read instrument state from screenshots |
+| PUDA integration | `puda` `EdgeRunner` + NATS | Expose commands and telemetry to the PUDA platform |
+
+---
 
 ## Repo Structure
 
 ```
-edge-python-template/
-├── pyproject.toml          # Python project dependencies
-├── uv.lock                 # Locked dependency versions (uv)
-├── main.py                 # Main edge service — NATS + driver instance
-├── driver.py               # Machine driver: @command methods and @tlm_stream telemetry
-├── Dockerfile              # Container build
-├── compose.yml             # Docker Compose
-├── start_edge.bat          # Windows launcher script
-├── .env.example            # Environment variable template
-├── .dockerignore           # Docker build context exclusions
-└── .gitignore              # Git ignore rules
+PUDA_guidriver/
+├── pyproject.toml   # dependencies (puda, mcp, anthropic, pydantic-settings)
+├── main.py          # Config → GuiDriver → EdgeNatsClient → EdgeRunner
+├── driver.py        # CuaDriverClient (MCP) + GuiDriver (@command, @tlm_stream)
+├── .env.example     # environment variable template
+├── Dockerfile       # container build (optional)
+└── compose.yml      # docker compose (optional)
 ```
-
-## AI Agent Instructions
-
-Follow these steps in order to adapt this template for a new machine.
-
-### 1. Choose a unique Machine ID in your env
-
-Pick a short, lowercase, hyphen-separated identifier for the machine and edit the `.env` file. This becomes `MACHINE_ID` everywhere.
-
-### 2. Complete all TODOs
-
-Search the repo for every `TODO` marker and resolve each one — typically renaming placeholder strings, filling in package metadata, and updating import paths to match the chosen `MACHINE_ID`.
-
-### 3. Implement the Driver
-
-Add the machine driver source in `driver.py`. The driver must expose a class that `puda.EdgeRunner` can wrap.
-
-- Require `puda>=0.0.18` in `pyproject.toml` (already set in this template). Add other hardware dependencies as needed.
-- Put a one-sentence summary in the **class docstring**. `puda machine list` and `puda machine info` show that first paragraph as `description`.
-- Decorate every remotely callable method with `@command`. Undecorated methods are not advertised or callable. A driver with no `@command` methods fails at startup.
-- Parameters should be JSON primitives (`str`, `int`, `float`, `bool`, `dict`, `list`) rather than custom class instances.
-- Keep helpers private (`_name`). Raise on hardware failure. Returning `False` is still a successful PUDA response (`{"result": false}`).
-- Attach `@safety` to commands that can cause harm. It is published in the catalog; it does not block edge dispatch, so enforce hard preconditions in the method body by raising. See `move_to` in `driver.py` (`confirm=True` so the agent prompts the operator before the move). Omit `@safety` on read-only commands.
-- Mark methods that return live readings with `@tlm_stream(interval=...)`, e.g. position, weight, or temperature. `EdgeRunner` calls each one every `interval` seconds in a separate worker thread and publishes the returned dict to `puda.<MACHINE_ID>.tlm.stream.<name>`. Streams can run at the same time as commands. Return `None` to skip a sample. Remove the example `get_position` stream if the machine has no position.
-- Return machine-level state (homed flag, loaded labware, current mode) from the `@machine_state` method. Its dict is merged into every MACHINE_STATE update read by `puda machine state`. At most one method may be marked.
-  - It is called on each state change (startup, command start and end, errors, shutdown), not on a timer, so values that change outside commands belong in a `@tlm_stream`.
-  - It runs on the edge's event loop. Return values the driver already has in memory; a slow device read here stalls commands and telemetry.
-  - Don't return `state`, `run_id`, or `timestamp`; PUDA sets those.
-
-### 4. Add Driver-Specific Environment Variables
-
-In `.env`, add any new config fields below `MACHINE_ID` (e.g. `${MACHINE_ID}_PORT`, `${MACHINE_ID}_HOST`). Keep `NATS_SERVERS` and `MACHINE_ID` as-is.
-
-### 5. Wire the Driver into main.py
-
-In `main.py`:
-
-1. Add any driver-specific environment variables to `Config` (e.g. device port, IP address).
-2. Instantiate the driver using those config fields.
-
-`EdgeRunner` publishes the heartbeat, host health (CPU, memory, temperature), every `@tlm_stream`, and the `@machine_state` fields on its own, so `main.py` only needs config and wiring.
-
-### 6. Update the Dockerfile
-
-In `Dockerfile`, add any system-level dependencies your driver needs (e.g. `libusb-dev` for USB devices).
-
-Replace this file with a machine-specific README describing what the machine does, how to connect to it, and any hardware prerequisites.
 
 ---
 
-## Environment Setup
+## How It Works
 
-From repo root:
-
-```bash
-cp .env.example .env
+```
+PUDA CLI / Protocol
+       │  NATS
+       ▼
+  EdgeRunner  ──────────────────────────►  GuiDriver (@command methods)
+                                                  │
+                           ┌───────────────────────┤
+                           │                       │
+                     cua-driver MCP          Claude vision
+                    (GUI automation)     (via Hermes model config)
+                           │                       │
+                     ┌─────▼──────┐      ┌─────────▼────────┐
+                     │ Instrument │ PNG  │  Extract status / │
+                     │ Software   │─────►│  plan GUI actions │
+                     │ (any app)  │      └──────────────────┘
+                     └────────────┘
 ```
 
-Edit `.env` and fill in:
+1. A PUDA command arrives via NATS (e.g. `status`, `find_and_click`, `run_gui_step`).
+2. `GuiDriver` calls `cua-driver` (via MCP) to **capture a screenshot** of the instrument window — in the background, no focus change.
+3. The screenshot is sent to **Claude vision** to extract the instrument state or decide which UI element to interact with. The LLM model and API credentials come from your existing Hermes configuration — no separate setup required.
+4. `GuiDriver` dispatches the synthesised mouse/keyboard event back through `cua-driver`.
+5. The result is returned to PUDA.
 
-- `MACHINE_ID` — machine identifier
-- `NATS_SERVERS` — comma-separated NATS server URLs
-- Any additional driver-specific variables
+---
 
-## Run With Docker (Recommended)
+## Prerequisites
 
-All commands below run from repo root.
+### 1. Install Hermes Agent with computer use
 
-Build and start:
+Follow the [Hermes installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation), then enable computer use and verify the setup:
 
-```bash
+```powershell
+hermes computer-use install
+hermes computer-use doctor      # verify — all checks should be green
+```
+
+`cua-driver` must be on your `PATH`. The doctor output confirms it. The LLM model and API key used for vision analysis are read from your Hermes configuration — no additional credentials are needed in this driver.
+
+**Windows note:** Grant no special permissions at install time, but if you drive over SSH (not RDP/console), follow the [Windows SSH autostart guide](https://cua.ai/docs/how-to-guides/driver/windows-ssh).
+
+### 2. Python environment (uv)
+
+```powershell
+uv sync
+```
+
+---
+
+## Setup
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Edit `.env` — only three values are needed:
+
+| Variable | Description |
+|---|---|
+| `MACHINE_ID` | Unique PUDA machine ID, e.g. `hplc-1` |
+| `NATS_SERVERS` | NATS cluster URLs |
+| `TARGET_APP` | **Exact window title** of the instrument software |
+| `CAPTURE_INTERVAL` | Seconds between telemetry status captures (default `30.0`) |
+
+### Finding the exact TARGET_APP name
+
+`TARGET_APP` must match the **window title** as cua-driver sees it. On Windows:
+
+```powershell
+# List all visible window titles
+Get-Process | Where-Object {$_.MainWindowTitle} | Select-Object MainWindowTitle
+```
+
+Use the title (or a unique prefix) as `TARGET_APP`.
+
+---
+
+## Run
+
+```powershell
+# Baremetal (uv)
+uv run python main.py
+
+# Or with Docker
 docker compose -f compose.yml up -d --build
-```
-
-View logs:
-
-```bash
 docker compose -f compose.yml logs -f
 ```
 
-Stop:
+---
 
-```bash
-docker compose -f compose.yml down
+## PUDA Commands
+
+| Command | Description |
+|---|---|
+| `status` | Capture screenshot → LLM reads all visible values → JSON status |
+| `capture_screenshot` | Return raw base64 PNG of the target app |
+| `find_and_click` | Describe a UI element; LLM locates + clicks it |
+| `type_text` | Type text, optionally clicking a field first |
+| `press_key` | Send a keyboard shortcut (e.g. `ctrl+s`, `f5`) |
+| `run_gui_step` | Execute one natural-language GUI instruction autonomously |
+| `ask_screen` | Ask the LLM a read-only question about the current screen |
+| `home` | Navigate to the app's main/home screen |
+| `reset` | Send Escape to cancel any in-progress operation |
+| `shutdown` | Close the cua-driver MCP session cleanly |
+
+### Telemetry stream
+
+`puda.<MACHINE_ID>.tlm.stream.instrument_status` — published every `CAPTURE_INTERVAL` seconds. The LLM reads the current screenshot and returns all visible instrument values as JSON.
+
 ```
-
-## Run Baremetal (uv)
-
-```bash
-uv sync
-uv run python main.py
-```
-
-## Verify
-
-With the edge running, check that it advertises its description and telemetry streams, then watch one:
-
-```bash
-puda machine info <MACHINE_ID>
 puda machine watch 'puda.<MACHINE_ID>.tlm.stream.>'
 ```
 
-## Build and Push Image (GHCR)
-
-Login:
+### Example CLI usage
 
 ```bash
-echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
+# Get current instrument status
+puda machine run my-instrument status
+
+# Click a named button
+puda machine run my-instrument find_and_click --description "Start Run button"
+
+# Set a value in a specific field
+puda machine run my-instrument type_text --text "37.5" --field_description "temperature setpoint"
+
+# Send a keyboard shortcut
+puda machine run my-instrument press_key --keys "ctrl+s"
+
+# Ad-hoc natural-language instruction
+puda machine run my-instrument run_gui_step --instruction "Open the File menu and click Export"
+
+# Read-only question about the screen
+puda machine run my-instrument ask_screen --question "Is there an active alarm?"
 ```
 
-Build and push:
+---
 
-```bash
-docker compose -f compose.yml build
-docker compose -f compose.yml push
+## Customising for a Specific Instrument
+
+### 1. Add instrument-specific commands
+
+Subclass `GuiDriver` in `driver.py` and add `@command` methods:
+
+```python
+class HplcGuiDriver(GuiDriver):
+    @command
+    def start_run(self, method_name: str) -> dict:
+        """Load a method and start an HPLC run."""
+        self.find_and_click("Method dropdown")
+        self.type_text(method_name, "method name field")
+        self.find_and_click("Start Run button")
+        return self.status()
 ```
 
-## Notes
+### 2. Multi-step automation (PUDA protocols)
 
-- Docker build context is the repository root.
-- Dockerfile path is `Dockerfile`.
-- `MACHINE_ID` in `.env` is used for NATS subject routing and Docker image/container naming.
+Chain commands in a PUDA protocol YAML:
+
+```yaml
+steps:
+  - machine: hplc-1
+    command: find_and_click
+    params: {description: "New Method button"}
+  - machine: hplc-1
+    command: type_text
+    params: {text: "1.0", field_description: "flow rate mL/min"}
+  - machine: hplc-1
+    command: press_key
+    params: {keys: "return"}
+  - machine: hplc-1
+    command: status
+```
+
+---
+
+## Troubleshooting
+
+**`cua-driver not found`** — run `hermes computer-use install`, confirm `cua-driver --version` works in a new terminal.
+
+**No image returned from capture** — the app window may be minimised or off-screen. Ensure it is visible. Run `hermes computer-use doctor` to check Screen Recording permission.
+
+**LLM cannot identify element** — the SOM screenshot may have too many elements. Use descriptive text that matches visible labels in the UI (button text, field labels). Use `capture_screenshot` + manual inspection to see what the LLM sees.
+
+**Windows SSH / Session 0** — drive from an RDP or console session directly, or enable the cua-driver autostart scheduled task. See the [Windows SSH guide](https://cua.ai/docs/how-to-guides/driver/windows-ssh).
