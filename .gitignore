@@ -54,3 +54,6 @@ Thumbs.db
 # AI tools
 .claude
 .cursor
+
+# Virtual environment
+.venv/

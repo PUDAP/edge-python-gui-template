@@ -21,3 +21,4 @@ Dockerfile
 compose.yml
 README.md
 start_edge.bat
+start_edge.sh
