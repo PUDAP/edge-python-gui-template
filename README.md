@@ -141,7 +141,6 @@ uv run python main.py
 | Python operation | Description |
 |---|---|
 | `capture_screenshot` | Return `image_b64` and a copied `capture` context (or null) |
-| `get_elements` | Inspect current accessibility elements, labels, and roles |
 | `find_element` | Find one enabled exact label/role match; reject ambiguity |
 | `wait_for_element` | Poll for an exact enabled match; raise on timeout or known error indicators |
 | `click_element` | Resolve and click one exact label/role match from a fresh capture |
@@ -157,7 +156,7 @@ Constructing `Driver` connects the MCP client. `main.py` calls internal `_close(
 
 ```bash
 puda machine run my-instrument capture_screenshot
-puda machine run my-instrument get_elements
+puda machine run my-instrument capture_screenshot --include_elements true
 puda machine run my-instrument find_element --label "Import"
 puda machine run my-instrument click_element --label "Import"
 puda machine run my-instrument wait_for_element --label "Browse" --timeout 15
@@ -171,13 +170,13 @@ puda machine run my-instrument import_file --file_path "/path/on/desktop/method.
 
 Machine commands call the public methods directly: `find_element`, `click_element`, and `capture_screenshot(include_elements=False)`. The redundant private wrappers have been removed. Use `capture_screenshot()["image_b64"]` when only the PNG is needed.
 
-Command responses omit the configured app name. `capture_screenshot` returns `image_b64` and `capture`; `get_elements` returns `elements`. The configured `target_app` remains in machine state for diagnostics. The copied `capture` context contains `capture_id`, `pid`, `window_id`, `bounds` (window x/y/width/height), and screenshot pixel `width`/`height`.
+Command responses omit the configured app name. `capture_screenshot` returns `image_b64` and `capture`; passing `include_elements=True` also returns a copied `elements` list from the same capture. This replaces the former `get_elements` command. The configured `target_app` remains in machine state for diagnostics. The copied `capture` context contains `capture_id`, `pid`, `window_id`, `bounds` (window x/y/width/height), and screenshot pixel `width`/`height`.
 
 `click_at(x, y, capture_id)` requires `result["capture"]["capture_id"]` from the screenshot used to choose coordinates. The ID is single-use and invalidated by subsequent captures or input. The client verifies the exact window's identity, visibility, and bounds before and after foregrounding it; it does not reposition the window or recapture. Call `capture_screenshot` separately for post-click feedback. If capture metadata or native targeted input is unavailable, `capture` is null and coordinate clicks are unavailable. These checks cannot detect changed content inside an otherwise unchanged window or prevent an external change between validation and dispatch.
 
-`capture_screenshot` replaces both `status` and `ask_screen`; interpret images in the calling agent. Replace `find_and_click(description)` with `click_element(label, role)` using exact, case-sensitive values from `get_elements`. Replace `type_text(text, field_description)` with separate `click_element` and `type_text` calls. Machine helpers now use `click_element(label, role)` instead of the former fuzzy helper.
+`capture_screenshot` replaces both `status` and `ask_screen`; interpret images in the calling agent. Replace `find_and_click(description)` with `click_element(label, role)` using exact, case-sensitive values from `capture_screenshot(include_elements=True)["elements"]`. Replace `type_text(text, field_description)` with separate `click_element` and `type_text` calls. Machine helpers now use `click_element(label, role)` instead of the former fuzzy helper.
 
-Matching considers enabled elements only. Missing or duplicate matches raise before input. `get_elements` requires a capture backend that supplies accessibility elements; screenshot-only backends cannot support element lookup. This does not change the client's existing window-selection heuristics or guarantee that the UI action completed; machine commands should check their expected result.
+Matching considers enabled elements only. Missing or duplicate matches raise before input. `capture_screenshot(include_elements=True)` requires a capture backend that supplies accessibility elements; screenshot-only backends cannot support element lookup. This does not change the client's existing window-selection heuristics or guarantee that the UI action completed; machine commands should check their expected result.
 
 ## Deploying a New Machine
 
@@ -191,7 +190,7 @@ Matching considers enabled elements only. Missing or duplicate matches raise bef
    | `self._run(self._cua.key("ctrl+s"))` / `type_text(...)` / `click(...)` | raw input |
    | `self._choose_file_in_dialog(path)` | fill a native file dialog (Windows *Open* or GNOME *Open Files*) after your code has clicked Import/Browse |
    | `self.capture_screenshot()["image_b64"]` | raw base64 PNG of the window |
-   | `self.capture_screenshot(include_elements=True)` | PNG plus a refreshed accessibility element cache |
+   | `self.capture_screenshot(include_elements=True)` | PNG, capture context, and accessibility elements from the same capture |
 
    See `Driver.import_file` for an executable example that checks for stale success, waits for Browse, submits the file, and waits for the operation's completion indicator. `success_label` is explicit in this template; a production driver should derive it from the requested file or encode an application-specific completion check.
 

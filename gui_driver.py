@@ -175,8 +175,7 @@ class GuiDriver:
 
     def _type_into_windows_dialog(self, file_path: str) -> None:
         """Fill the Windows filename field, falling back to foreground typing."""
-        self.capture_screenshot(include_elements=True)  # select the modal and inspect its fields
-        elements = self._cua._last_elements
+        elements = self.capture_screenshot(include_elements=True)["elements"]
         filename_fields = [
             e for e in elements
             if str(e.get("role", "")).casefold() == "edit"
@@ -225,11 +224,13 @@ class GuiDriver:
         Capturing foregrounds the app and invalidates earlier capture IDs.
 
         Args:
-            include_elements: Refresh accessibility elements as well. Defaults to False.
+            include_elements: Include accessibility elements from the same capture.
+                Defaults to False.
 
         Returns:
             dict: image_b64 and capture. capture contains capture_id, pid, window_id,
             bounds, width, and height, or is None when coordinate input is unavailable.
+            When include_elements=True, also includes a copied elements list.
 
         Raises:
             TypeError: include_elements is not a bool.
@@ -245,22 +246,10 @@ class GuiDriver:
                 "Ensure the app is visible and screen capture is permitted."
             )
         self._last_status = {"captured_at": time.time()}
-        return {"image_b64": img, "capture": deepcopy(self._cua._coordinate_capture)}
-
-    def get_elements(self) -> dict:
-        """Capture the application's current accessibility elements.
-
-        Capturing invalidates earlier coordinate capture IDs.
-
-        Returns:
-            dict: elements, a list of accessibility records with labels, roles,
-            indices, and any additional fields supplied by the backend.
-
-        Raises:
-            RuntimeError: The backend cannot capture the image or accessibility elements.
-        """
-        self.capture_screenshot(include_elements=True)
-        return {"elements": self._cua._last_elements}
+        response = {"image_b64": img, "capture": deepcopy(self._cua._coordinate_capture)}
+        if include_elements:
+            response["elements"] = deepcopy(self._cua._last_elements)
+        return response
 
     def find_element(self, label: str, role: str = "") -> dict:
         """Find one enabled element by exact, case-sensitive label and optional role.
@@ -281,7 +270,7 @@ class GuiDriver:
         """
         if not label:
             raise ValueError("An exact non-empty element label is required")
-        elements = self.get_elements()["elements"]
+        elements = self.capture_screenshot(include_elements=True)["elements"]
         matches = [
             element for element in elements
             if element.get("label") == label
@@ -293,7 +282,7 @@ class GuiDriver:
         if len(matches) > 1:
             raise RuntimeError(
                 f"Ambiguous element: {len(matches)} matches for label={label!r}, role={role!r}. "
-                "Inspect get_elements and specify a unique label and role, or use click_at."
+                "Capture with include_elements=True and specify a unique label and role, or use click_at."
             )
         return dict(matches[0])
 

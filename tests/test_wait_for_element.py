@@ -14,7 +14,7 @@ class WaitForElementTests(unittest.TestCase):
         frames = iter(observations)
         def capture(**kwargs):
             d._cua._last_elements = next(frames)
-            return {"image_b64": "PNG", "capture": None}
+            return {"image_b64": "PNG", "capture": None, "elements": d._cua._last_elements}
         d.capture_screenshot = mock.Mock(side_effect=capture)
         return d
 

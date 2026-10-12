@@ -80,7 +80,7 @@ class ElementClickTests(unittest.TestCase):
 
     def test_lookup_is_read_only_and_role_disambiguates(self):
         d, clicked = self._driver([elem(1, "Start", role="text"), elem(2, "Start")])
-        self.assertEqual(len(d.get_elements()["elements"]), 2)
+        self.assertEqual(len(d.capture_screenshot(include_elements=True)["elements"]), 2)
         self.assertEqual(d.find_element("Start", "push button")["element_index"], 2)
         self.assertEqual(clicked, [])
         self.assertEqual(d.click_element("Start", "push button")["clicked_element"], 2)
@@ -415,10 +415,25 @@ class StartupEnvTests(unittest.TestCase):
 
 
 class CommandSurfaceTests(unittest.TestCase):
+    def test_capture_optionally_returns_independent_elements_from_one_capture(self):
+        elements = [elem(1, "Start", frame={"x": 10})]
+        capture = mock.AsyncMock(return_value=SimpleNamespace(
+            content=[SimpleNamespace(type="image", data="PNG")],
+        ))
+        d = make_driver(capture=capture, _last_elements=elements)
+        result = d.capture_screenshot(include_elements=True)
+        self.assertEqual(result["image_b64"], "PNG")
+        self.assertEqual(result["elements"], elements)
+        capture.assert_awaited_once_with(app="Demo", include_elements=True)
+        result["elements"][0]["frame"]["x"] = 99
+        self.assertEqual(elements[0]["frame"]["x"], 10)
+        self.assertNotIn("elements", d.capture_screenshot())
+        self.assertFalse(hasattr(d, "get_elements"))
+
     def test_only_explicit_machine_commands_are_remote(self):
         self.assertEqual(
             resolve_command_names(object.__new__(Driver)),
-            {"capture_screenshot", "get_elements", "find_element", "wait_for_element",
+            {"capture_screenshot", "find_element", "wait_for_element",
              "click_element", "set_value", "type_text", "scroll", "press_key",
              "click_at", "import_file"},
         )

@@ -99,32 +99,19 @@ class Driver(GuiDriver):
         Capturing foregrounds the app and invalidates earlier capture IDs.
 
         Args:
-            include_elements: Refresh accessibility elements as well. Defaults to False.
+            include_elements: Include accessibility elements from the same capture.
+                Defaults to False.
 
         Returns:
             dict: image_b64 and capture. capture contains capture_id, pid, window_id,
             bounds, width, and height, or is None when coordinate input is unavailable.
+            When include_elements=True, also includes a copied elements list.
 
         Raises:
             TypeError: include_elements is not a bool.
             RuntimeError: Capture fails, returns no image, or cannot provide requested elements.
         """
         return super().capture_screenshot(include_elements=include_elements)
-
-    @command
-    def get_elements(self) -> dict:
-        """Capture the application's current accessibility elements.
-
-        Capturing invalidates earlier coordinate capture IDs.
-
-        Returns:
-            dict: elements, a list of accessibility records with labels, roles,
-            indices, and any additional fields supplied by the backend.
-
-        Raises:
-            RuntimeError: The backend cannot capture the image or accessibility elements.
-        """
-        return super().get_elements()
 
     @command
     def find_element(self, label: str, role: str = "") -> dict:
