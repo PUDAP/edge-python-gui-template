@@ -46,26 +46,26 @@ class ElementClickTests(unittest.TestCase):
 
     def test_clicks_exact_matching_element(self):
         d, clicked = self._driver([elem(1, "Cancel run"), elem(2, "Start run"), elem(3, "Start")])
-        self.assertEqual(d._click_element("Start run"), 2)
+        self.assertEqual(d.click_element("Start run")["clicked_element"], 2)
         self.assertEqual(clicked, [2])
 
     def test_raises_when_nothing_matches(self):
         d, clicked = self._driver([elem(1, "Cancel")])
         with mock.patch.object(driver.time, "sleep"):
             with self.assertRaises(RuntimeError):
-                d._click_element("Save")
+                d.click_element("Save")
         self.assertEqual(clicked, [])
 
     def test_ignores_disabled_elements(self):
         d, clicked = self._driver([elem(1, "Start run", enabled=False)])
         with mock.patch.object(driver.time, "sleep"):
             with self.assertRaises(RuntimeError):
-                d._click_element("Start run")
+                d.click_element("Start run")
 
     def test_rejects_ambiguous_matches(self):
         d, clicked = self._driver([elem(9, "Start"), elem(2, "Start")])
         with self.assertRaisesRegex(RuntimeError, "Ambiguous"):
-            d._click_element("Start")
+            d.click_element("Start")
         self.assertEqual(clicked, [])
 
     def test_rejects_element_outside_captured_window(self):
@@ -74,7 +74,7 @@ class ElementClickTests(unittest.TestCase):
         ])
         d._cua._capture_meta = {"window_bounds": {"x": 0, "y": 0, "width": 100, "height": 100}}
         with self.assertRaisesRegex(RuntimeError, "outside the captured window"):
-            d._click_element("Start")
+            d.click_element("Start")
         self.assertEqual(clicked, [])
 
     def test_lookup_is_read_only_and_role_disambiguates(self):
@@ -222,6 +222,55 @@ class FileDialogDetectionTests(unittest.TestCase):
         win = {"title": "Demo", "app_name": "Demo", "pid": 1, "window_id": 2}
         self.assertIsNone(asyncio.run(self._client([win])._find_file_dialog("Demo")))
 
+    def test_prefers_target_app_dialog_over_portal(self):
+        portal = {"title": "Open Files", "app_name": "xdg-desktop-portal-gnome"}
+        target = {"title": "Open", "app_name": "Demo.exe"}
+        for windows in ([portal, target], [target, portal]):
+            with self.subTest(windows=windows):
+                self.assertEqual(asyncio.run(self._client(windows)._find_file_dialog("Demo")), target)
+
+
+class WaitFileDialogTests(unittest.TestCase):
+    def test_waits_for_appearance_and_disappearance(self):
+        dialog = {"title": "Open", "app_name": "Demo"}
+        for appear, observations, expected in (
+            (True, [None, dialog], dialog),
+            (False, [dialog, None], None),
+        ):
+            with self.subTest(appear=appear):
+                finder = mock.AsyncMock(side_effect=observations)
+                d = make_driver(_find_file_dialog=finder)
+                with mock.patch.object(driver.time, "sleep"):
+                    self.assertEqual(d._wait_file_dialog(appear=appear), expected)
+                self.assertEqual(finder.await_count, 2)
+
+    def test_zero_timeout_still_checks_current_state(self):
+        dialog = {"title": "Open"}
+        d = make_driver(_find_file_dialog=mock.AsyncMock(return_value=dialog))
+        self.assertEqual(d._wait_file_dialog(timeout=0), dialog)
+        with self.assertRaisesRegex(RuntimeError, "did not close"):
+            d._wait_file_dialog(appear=False, timeout=0)
+        d._cua._find_file_dialog.return_value = None
+        self.assertIsNone(d._wait_file_dialog(appear=False, timeout=0))
+        with self.assertRaisesRegex(RuntimeError, "did not open"):
+            d._wait_file_dialog(timeout=0)
+
+    def test_rejects_invalid_timeout_before_discovery(self):
+        finder = mock.AsyncMock()
+        d = make_driver(_find_file_dialog=finder)
+        for timeout in (-1, float("inf"), float("nan")):
+            with self.subTest(timeout=timeout), self.assertRaises(ValueError):
+                d._wait_file_dialog(timeout=timeout)
+        finder.assert_not_awaited()
+
+    def test_poll_sleep_is_capped_to_remaining_time(self):
+        d = make_driver(_find_file_dialog=mock.AsyncMock(return_value=None))
+        clock = SimpleNamespace(monotonic=mock.Mock(side_effect=[0, 0.8, 1]), sleep=mock.Mock())
+        with mock.patch.object(driver, "time", clock):
+            with self.assertRaisesRegex(RuntimeError, "did not open"):
+                d._wait_file_dialog(timeout=1)
+        self.assertAlmostEqual(clock.sleep.call_args.args[0], 0.2)
+
 
 class ChooseFileTests(unittest.TestCase):
     def test_windows_dialog_uses_accessibility_or_keyboard_fallback(self):
@@ -367,9 +416,9 @@ class StartupEnvTests(unittest.TestCase):
 class CommandSurfaceTests(unittest.TestCase):
     def test_internal_helpers_are_not_public(self):
         public = {n for n in dir(Driver) if not n.startswith("_")}
-        # reset/shutdown are lifecycle helpers; everything else public is a command
+        # Every public method is a command; cleanup is internal.
         self.assertEqual(
-            public - {"reset", "shutdown"},
+            public,
             {"capture_screenshot", "get_elements", "find_element", "click_element",
              "set_value", "scroll", "type_text", "press_key", "click_at"},
         )

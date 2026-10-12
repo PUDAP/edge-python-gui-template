@@ -11,16 +11,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import threading
 import time
+from concurrent.futures import Future
 from typing import Any
 
 from puda import command
 
-from cua_client import CuaDriverClient, FILE_DIALOG_TITLES
+from cua_client import CuaDriverClient
 
 logger = logging.getLogger(__name__)
-
 
 
 class GuiDriver:
@@ -47,88 +48,75 @@ class GuiDriver:
 
         # Background asyncio loop bridging sync PUDA worker threads to async MCP calls.
         self._loop = asyncio.new_event_loop()
+        self._ready: Future[None] = Future()
+        self._stop_requested = asyncio.Event()
+        self._closed = False
         self._loop_thread = threading.Thread(
-            target=self._loop.run_forever, daemon=True, name="guidriver-async-loop"
+            target=self._run_loop, daemon=True, name="guidriver-async-loop"
         )
         self._loop_thread.start()
+        self._client_lifetime = asyncio.run_coroutine_threadsafe(self._serve_client(), self._loop)
+        try:
+            self._ready.result(timeout=60)
+        except BaseException:
+            self._close()
+            raise
+        logger.info("GuiDriver ready — target_app=%r", self.target_app)
 
     # ── lifecycle (not remotely callable) ──────────────────────────────────
 
-    def _startup(self) -> None:
-        """Start the cua-driver MCP session. Called once from main.py."""
-        self._run(self._cua.start())
-        logger.info("GuiDriver ready — target_app=%r", self.target_app)
+    def _run_loop(self) -> None:
+        """Own the background loop and release its pending tasks on exit."""
+        asyncio.set_event_loop(self._loop)
+        try:
+            self._loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(self._loop)
+            for task in pending:
+                task.cancel()
+            self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+            self._loop.close()
+
+    async def _serve_client(self) -> None:
+        """Open and close the MCP contexts in the same persistent async task."""
+        try:
+            await self._cua.start()
+            self._ready.set_result(None)
+            await self._stop_requested.wait()
+        except BaseException as exc:
+            if not self._ready.done():
+                self._ready.set_exception(exc)
+            raise
+        finally:
+            await self._cua.stop()
 
     def _run(self, coro) -> Any:
         """Submit an async coroutine to the background loop and block until done."""
+        if self._closed:
+            coro.close()
+            raise RuntimeError("GuiDriver is closed")
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout=60)
 
     def _snapshot(self) -> dict:
         """Cached state merged into every MACHINE_STATE update (must not touch the screen)."""
         return {"target_app": self.target_app, "last_status": self._last_status}
 
-    def reset(self) -> bool:
-        """Send Escape to cancel any in-progress operation."""
-        self._run(self._cua.key("escape"))
-        return True
-
-    def shutdown(self) -> bool:
-        """Close the cua-driver MCP session cleanly."""
+    def _close(self) -> None:
+        """Release MCP and the background loop; main.py calls this on exit."""
+        if self._closed:
+            return
+        self._closed = True
         try:
-            self._run(self._cua.stop())
+            self._loop.call_soon_threadsafe(self._stop_requested.set)
+            self._client_lifetime.result(timeout=60)
         except Exception as e:
-            logger.warning("shutdown error: %s", e)
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        return True
-
-    def _stream_status(self) -> dict | None:
-        """Raw screenshot telemetry sample (not scheduled by default).
-
-        Every capture brings the window to the foreground, so periodic polling
-        steals focus from the operator. To enable it, decorate this method with
-        ``@tlm_stream(interval=30.0, name="instrument_status")`` (import it from puda).
-        """
-        try:
-            result = self.capture_screenshot()
-            return {"image_b64": result["image_b64"]}
-        except Exception as e:
-            logger.warning("stream_status failed: %s", e)
-            return None
+            logger.warning("GUI client cleanup: %s", e)
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._loop_thread.join()
 
     # ── generic GUI helpers ────────────────────────────────────────────────
-
-    def _screenshot(self, include_elements: bool = False) -> str:
-        """Return a base64 PNG; optionally refresh accessibility elements as well."""
-        result = self._run(self._cua.capture(
-            app=self.target_app, include_elements=include_elements,
-        ))
-        img = CuaDriverClient.extract_image_b64(result)
-        if img is None:
-            raise RuntimeError(
-                f"cua-driver returned no image for app={self.target_app!r}. "
-                "Ensure the app is visible and screen capture is permitted."
-            )
-        return img
-
-    def _find_element(self, label: str, role: str = "") -> dict[str, Any]:
-        """Find one enabled element by exact, case-sensitive label and optional role."""
-        if not label:
-            raise ValueError("An exact non-empty element label is required")
-        self._screenshot(include_elements=True)
-        matches = [
-            element for element in self._cua._last_elements
-            if element.get("label") == label
-            and (not role or element.get("role") == role)
-            and element.get("enabled", True)
-        ]
-        if not matches:
-            raise RuntimeError(f"No enabled element matches label={label!r}, role={role!r}")
-        if len(matches) > 1:
-            raise RuntimeError(
-                f"Ambiguous element: {len(matches)} matches for label={label!r}, role={role!r}. "
-                "Inspect get_elements and specify a unique label and role, or use click_at."
-            )
-        return matches[0]
 
     def _validate_element_position(self, element: dict[str, Any], description: str) -> None:
         """Reject accessibility coordinates outside the captured window."""
@@ -145,49 +133,26 @@ class GuiDriver:
                 "Use the click_at command with coordinates taken from a fresh screenshot."
             )
 
-    def _click_element(self, label: str, role: str = "") -> int:
-        """Resolve a unique element from a fresh capture and click it once."""
-        selected = self._find_element(label, role)
-        self._validate_element_position(selected, label)
-        index = int(selected["element_index"])
-        self._run(self._cua.click(element=index))
-        return index
-
-    def _element_labels(self) -> list[str]:
-        """Labels from the latest capture with include_elements=True (for debugging)."""
-        return [str(e.get("label", "")) for e in self._cua._last_elements if e.get("label")]
-
     # ── native file-dialog helpers ─────────────────────────────────────────
 
-    def _current_file_dialog(self) -> dict | None:
-        """Return the open native file dialog, or None.
-
-        First a window of the target app titled "Open"/"Save As" (how Windows
-        exposes it); then a search across all windows for the GNOME portal
-        chooser ("Open Files"), which belongs to xdg-desktop-portal, not the app.
-        """
-        windows = self._run(self._cua._matching_windows(self.target_app))
-        for window in windows:
-            if str(window.get("title", "")).casefold() in FILE_DIALOG_TITLES:
-                return window
-        finder = getattr(self._cua, "_find_file_dialog", None)
-        return self._run(finder(self.target_app)) if finder is not None else None
-
     def _wait_file_dialog(self, appear: bool = True, timeout: float = 15.0) -> dict | None:
-        """Poll until the file dialog appears (or disappears if ``appear=False``).
-
-        Apps repaint slowly, so a generous timeout avoids false failures.
-        """
+        """Wait for the requested dialog state; raise if it is not reached in time."""
+        if not math.isfinite(timeout) or timeout < 0:
+            raise ValueError("timeout must be finite and non-negative")
         deadline = time.monotonic() + timeout
         while True:
-            dialog = self._current_file_dialog()
-            if appear and dialog is not None:
+            dialog = self._run(self._cua._find_file_dialog(self.target_app))
+            if (dialog is not None) == appear:
                 return dialog
-            if not appear and dialog is None:
-                return None
-            if time.monotonic() >= deadline:
-                return dialog
-            time.sleep(0.5)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if appear:
+                    raise RuntimeError(
+                        "The file dialog did not open. Open it first (click the app's "
+                        "Import/Browse/Open button), then call _choose_file_in_dialog."
+                    )
+                raise RuntimeError("The file dialog did not close after choosing the file")
+            time.sleep(min(0.5, remaining))
 
     def _type_into_portal_dialog(self, dialog: dict, file_path: str) -> None:
         """Type a path into the GNOME/GTK file chooser: Ctrl+L, path, Enter."""
@@ -206,8 +171,8 @@ class GuiDriver:
 
     def _type_into_windows_dialog(self, file_path: str) -> None:
         """Fill the Windows filename field, falling back to foreground typing."""
-        self._screenshot(include_elements=True)  # select the modal and inspect its fields
-        elements = getattr(self._cua, "_last_elements", [])
+        self.capture_screenshot(include_elements=True)  # select the modal and inspect its fields
+        elements = self._cua._last_elements
         filename_fields = [
             e for e in elements
             if str(e.get("role", "")).casefold() == "edit"
@@ -219,16 +184,17 @@ class GuiDriver:
             and str(e.get("label", "")).casefold() == "open"
             and "invoke" in e.get("actions", [])
         ]
-        if filename_fields and open_buttons and "set_value" in getattr(self._cua, "_tools", {}):
-            self._run(self._cua.set_value(int(filename_fields[0]["element_index"]), file_path))
-            open_button = max(
-                open_buttons,
-                key=lambda e: e.get("frame", {}).get("w", 0) * e.get("frame", {}).get("h", 0),
-            )
-            self._run(self._cua.click(element=int(open_button["element_index"])))
-        else:
+        if not (filename_fields and open_buttons and "set_value" in self._cua._tools):
             self._run(self._cua.type_text(file_path, delivery_mode="foreground"))
             self._run(self._cua.key("return", delivery_mode="foreground"))
+            return
+
+        self._run(self._cua.set_value(int(filename_fields[0]["element_index"]), file_path))
+        open_button = max(
+            open_buttons,
+            key=lambda e: e.get("frame", {}).get("w", 0) * e.get("frame", {}).get("h", 0),
+        )
+        self._run(self._cua.click(element=int(open_button["element_index"])))
 
     def _choose_file_in_dialog(self, file_path: str, timeout: float = 15.0) -> None:
         """Fill the native file dialog with ``file_path`` and confirm it.
@@ -239,40 +205,43 @@ class GuiDriver:
         does not close afterwards.
         """
         dialog = self._wait_file_dialog(timeout=timeout)
-        if dialog is None:
-            raise RuntimeError(
-                "The file dialog did not open. Open it first (click the app's "
-                "Import/Browse/Open button), then call _choose_file_in_dialog."
-            )
-
+        assert dialog is not None  # appear=True returns a dialog or raises
         if "portal" in str(dialog.get("app_name", "")).casefold():
             self._type_into_portal_dialog(dialog, file_path)
         else:
             self._type_into_windows_dialog(file_path)
 
-        if self._wait_file_dialog(appear=False, timeout=timeout) is not None:
-            raise RuntimeError("The file dialog did not close after choosing the file")
+        self._wait_file_dialog(appear=False, timeout=timeout)
 
     # ── base PUDA commands (generic — work for any application) ────────────
 
     @command
-    def capture_screenshot(self) -> dict:
+    def capture_screenshot(self, include_elements: bool = False) -> dict:
         """Return a PNG and a single-use capture_id for coordinate clicks.
 
         capture_id is None when the backend cannot provide window identity and
         geometry. Any later capture or input invalidates the ID.
+        Set include_elements=True to refresh accessibility elements as well.
         """
-        image = self._screenshot()
+        result = self._run(self._cua.capture(
+            app=self.target_app, include_elements=include_elements,
+        ))
+        img = CuaDriverClient.extract_image_b64(result)
+        if img is None:
+            raise RuntimeError(
+                f"cua-driver returned no image for app={self.target_app!r}. "
+                "Ensure the app is visible and screen capture is permitted."
+            )
         self._last_status = {"captured_at": time.time()}
         capture = getattr(self._cua, "_coordinate_capture", None) or {}
-        return {"image_b64": image,
+        return {"image_b64": img,
                 "capture_id": capture.get("capture_id"),
                 "width": capture.get("width"), "height": capture.get("height")}
 
     @command
     def get_elements(self) -> dict:
         """Capture the current accessibility elements, including labels and roles."""
-        self._screenshot(include_elements=True)
+        self.capture_screenshot(include_elements=True)
         return {"elements": self._cua._last_elements}
 
     @command
@@ -282,7 +251,23 @@ class GuiDriver:
         Matching is case-sensitive. Missing or ambiguous matches raise.
         Element indices describe this capture only; actions resolve a fresh match.
         """
-        return dict(self._find_element(label, role))
+        if not label:
+            raise ValueError("An exact non-empty element label is required")
+        elements = self.get_elements()["elements"]
+        matches = [
+            element for element in elements
+            if element.get("label") == label
+            and (not role or element.get("role") == role)
+            and element.get("enabled", True)
+        ]
+        if not matches:
+            raise RuntimeError(f"No enabled element matches label={label!r}, role={role!r}")
+        if len(matches) > 1:
+            raise RuntimeError(
+                f"Ambiguous element: {len(matches)} matches for label={label!r}, role={role!r}. "
+                "Inspect get_elements and specify a unique label and role, or use click_at."
+            )
+        return dict(matches[0])
 
     @command
     def click_element(self, label: str, role: str = "") -> dict:
@@ -290,7 +275,10 @@ class GuiDriver:
 
         Missing or ambiguous matches raise without sending input.
         """
-        index = self._click_element(label, role)
+        selected = self.find_element(label, role)
+        self._validate_element_position(selected, label)
+        index = int(selected["element_index"])
+        self._run(self._cua.click(element=index))
         return {"clicked_element": index, "label": label, "role": role}
 
     @command
@@ -300,7 +288,7 @@ class GuiDriver:
         Requires native cua-driver set_value support. Raises on missing or
         ambiguous matches or rejected input; does not fall back to typing.
         """
-        element = self._find_element(label, role)
+        element = self.find_element(label, role)
         self._run(self._cua.set_value(int(element["element_index"]), value))
         return {"label": label, "role": role, "value": value}
 
@@ -321,7 +309,7 @@ class GuiDriver:
             raise ValueError("direction must be up, down, left, or right")
         if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
             raise ValueError("amount must be a positive integer")
-        self._screenshot()
+        self.capture_screenshot()
         self._run(self._cua.scroll(direction=direction, amount=amount))
         return {"direction": direction, "amount": amount}
 

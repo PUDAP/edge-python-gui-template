@@ -26,12 +26,12 @@ class Driver(GuiDriver):
     # @command
     # def start_run(self) -> dict:
     #     """Start the instrument run and return its resulting screen."""
-    #     self._click_element("Start run")
+    #     self.click_element("Start run")
     #     # Check the application's expected running state before returning.
-    #     return {"image_b64": self._screenshot()}
+    #     return {"image_b64": self.capture_screenshot()["image_b64"]}
     #
     # Available helpers:
-    #   self._click_element(label, role)   click one exact accessibility match
-    #   self._choose_file_in_dialog(path) fill and confirm an open file dialog
-    #   self._screenshot()                capture a base64 PNG
-    #   self._run(self._cua.key("enter")) dispatch a raw input action
+    #   self.click_element(label, role)       click one exact accessibility match
+    #   self._choose_file_in_dialog(path)     fill and confirm an open file dialog
+    #   self.capture_screenshot()             return PNG and capture metadata
+    #   self.press_key("enter")               dispatch a key press

@@ -149,14 +149,17 @@ class CuaDriverClient:
         """
         needle = app.casefold()
         result = await self._call("list_windows", {"on_screen_only": False})
+        fallback = None
         for window in self._structured(result).get("windows", []):
             title = str(window.get("title", "")).casefold()
             owner = str(window.get("app_name", "")).casefold()
-            if title in FILE_DIALOG_TITLES and (
-                "portal" in owner or not owner or (needle and needle in owner)
-            ):
+            if title not in FILE_DIALOG_TITLES:
+                continue
+            if needle and (needle in owner or needle in title):
                 return window
-        return None
+            if fallback is None and ("portal" in owner or not owner):
+                fallback = window
+        return fallback
 
     async def _make_window_visible(self, window: dict[str, Any]) -> dict[str, Any]:
         """Restore an exact window to the primary display and foreground it."""

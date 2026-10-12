@@ -148,7 +148,7 @@ docker compose -f compose.yml up -d --build
 | `press_key` | Send a keyboard shortcut (e.g. `ctrl+s`, `f5`) |
 | `click_at` | Click screenshot pixels using its `capture_id`; reject changed window geometry |
 
-`reset` (Escape) and `shutdown` are lifecycle helpers, not remote commands.
+Constructing `Driver` connects the MCP client. `main.py` calls internal `_close()` in a `finally` block on normal exit, cancellation, or failure before retrying. Use `press_key("escape")` to send Escape; there is no generic reset command.
 
 ### Example CLI usage
 
@@ -164,11 +164,13 @@ puda machine run my-instrument press_key --keys "ctrl+s"
 
 ### Command migration
 
+Machine commands call the public methods directly: `find_element`, `click_element`, and `capture_screenshot(include_elements=False)`. The redundant private wrappers have been removed. Use `capture_screenshot()["image_b64"]` when only the PNG is needed.
+
 Command and screenshot telemetry responses omit the configured app name. `capture_screenshot` returns `image_b64`, `capture_id`, `width`, and `height`; `get_elements` returns `elements`. The configured `target_app` remains in machine state for diagnostics.
 
 `click_at(x, y, capture_id)` now requires the ID returned alongside the screenshot used to choose coordinates. The ID is single-use and invalidated by subsequent captures or input. The client verifies the exact window's identity, visibility, and bounds before and after foregrounding it; it does not reposition the window or recapture. Call `capture_screenshot` separately for post-click feedback. If capture metadata or native targeted input is unavailable, `capture_id` is null and coordinate clicks are unavailable. These checks cannot detect changed content inside an otherwise unchanged window or prevent an external change between validation and dispatch.
 
-`capture_screenshot` replaces both `status` and `ask_screen`; interpret images in the calling agent. Replace `find_and_click(description)` with `click_element(label, role)` using exact, case-sensitive values from `get_elements`. Replace `type_text(text, field_description)` with separate `click_element` and `type_text` calls. Machine helpers now use `_click_element(label, role)` instead of the former fuzzy helper.
+`capture_screenshot` replaces both `status` and `ask_screen`; interpret images in the calling agent. Replace `find_and_click(description)` with `click_element(label, role)` using exact, case-sensitive values from `get_elements`. Replace `type_text(text, field_description)` with separate `click_element` and `type_text` calls. Machine helpers now use `click_element(label, role)` instead of the former fuzzy helper.
 
 Matching considers enabled elements only. Missing or duplicate matches raise before input. `get_elements` requires a capture backend that supplies accessibility elements; screenshot-only backends cannot support element lookup. This does not change the client's existing window-selection heuristics or guarantee that the UI action completed; machine commands should check their expected result.
 
@@ -180,21 +182,21 @@ Matching considers enabled elements only. Missing or duplicate matches raise bef
 
    | Helper | Use |
    |---|---|
-   | `self._click_element("Start run")` | click one exact accessibility label/role match; reject ambiguity |
+   | `self.click_element("Start run")` | click one exact accessibility label/role match; reject ambiguity |
    | `self._run(self._cua.key("ctrl+s"))` / `type_text(...)` / `click(...)` | raw input |
    | `self._choose_file_in_dialog(path)` | fill a native file dialog (Windows *Open* or GNOME *Open Files*) after your code has clicked Import/Browse |
-   | `self._screenshot()` | raw base64 PNG of the window |
-   | `self._screenshot(include_elements=True)` | PNG plus a refreshed accessibility element cache |
+   | `self.capture_screenshot()["image_b64"]` | raw base64 PNG of the window |
+   | `self.capture_screenshot(include_elements=True)` | PNG plus a refreshed accessibility element cache |
 
    ```python
    @command
    def import_file(self, file_path: str) -> dict:
        """Import a file through the app's Import button."""
-       self._click_element("Import")
+       self.click_element("Import")
        time.sleep(1.0)
-       self._click_element("Browse")
+       self.click_element("Browse")
        self._choose_file_in_dialog(file_path)
-       return {"file_path": file_path, "image_b64": self._screenshot()}
+       return {"file_path": file_path, "image_b64": self.capture_screenshot()["image_b64"]}
    ```
 
 4. **Rename the driver class if you like** (e.g. `HplcDriver`) and update the import in `main.py`. Keep machine-specific commands in `driver.py`; `gui_driver.py` provides reusable automation helpers and `cua_client.py` handles the MCP transport and desktop input. If you override the constructor, call `super().__init__(target_app)`.
@@ -202,14 +204,14 @@ Matching considers enabled elements only. Missing or duplicate matches raise bef
 
 ### Telemetry
 
-Periodic screenshots are **off by default**, because every capture brings the window to the foreground and would steal focus from the operator. To enable them for a machine, import `tlm_stream` from `puda` in `driver.py`, override `_stream_status` in `Driver` to return `super()._stream_status()`, and decorate the override with `@tlm_stream(interval=30.0, name="instrument_status")`.
+The base driver does not schedule screenshot telemetry. A machine that needs it can define its own method in `driver.py`, decorate it with `@tlm_stream(interval=30.0, name="instrument_status")` (imported from `puda`), and return `{"image_b64": self.capture_screenshot()["image_b64"]}`. Each capture brings the window to the foreground and invalidates any outstanding coordinate-click capture ID.
 
 ---
 
 ## Things to Know
 
 - **The app repaints slowly.** After a click, wait (about 5–15 s on a slow app) before trusting a fresh screenshot. `_wait_file_dialog` already polls for up to 15 s.
-- **Prefer `_click_element` over pixels.** Use `click_at` only with coordinates taken from a fresh screenshot.
+- **Prefer `click_element` over pixels.** Use `click_at` only with coordinates taken from a fresh screenshot.
 - **Windows and Linux differ only at the edges:** the file-chooser (handled by `_choose_file_in_dialog`) and how the window is found. Page-level checks that rely on an app exposing its URL do not work on Linux accessibility trees; verify the screen instead.
 
 ---

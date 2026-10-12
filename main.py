@@ -100,26 +100,28 @@ async def main() -> None:
 
     logger.info("Initialising Driver for %r…", config.target_app)
     driver = Driver(target_app=config.target_app)
-    driver._startup()   # connects to cua-driver MCP, lists available tools
 
-    logger.info("Connecting to NATS at %s…", config.nats_servers)
-    edge_nats_client = EdgeNatsClient(
-        servers=config.nats_server_list,
-        machine_id=config.machine_id,
-    )
+    try:
+        logger.info("Connecting to NATS at %s…", config.nats_servers)
+        edge_nats_client = EdgeNatsClient(
+            servers=config.nats_server_list,
+            machine_id=config.machine_id,
+        )
 
-    runner = EdgeRunner(
-        nats_client=edge_nats_client,
-        machine_driver=driver,
-        state_handler=driver._snapshot,
-    )
-    await runner.connect()
+        runner = EdgeRunner(
+            nats_client=edge_nats_client,
+            machine_driver=driver,
+            state_handler=driver._snapshot,
+        )
+        await runner.connect()
 
-    logger.info(
-        "==================== %s GUI Edge Service Ready ====================",
-        config.machine_id,
-    )
-    await runner.run()
+        logger.info(
+            "==================== %s GUI Edge Service Ready ====================",
+            config.machine_id,
+        )
+        await runner.run()
+    finally:
+        driver._close()
 
 
 # ── retry loop ─────────────────────────────────────────────────────────────
