@@ -380,7 +380,7 @@ wheels = [
 ]
 
 [[package]]
-name = "edge-gui-python-template"
+name = "edge-python-gui-template"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

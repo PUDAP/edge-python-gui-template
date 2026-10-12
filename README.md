@@ -1,4 +1,4 @@
-# edge-gui-python-template
+# edge-python-gui-template
 
 A template for PUDA edge services that integrate **any desktop instrument software** into PUDA without a hardware SDK. Copy it once per machine, set the window name, and add that machine's commands. It runs on **Windows** and **Linux (X11)**.
 
@@ -14,7 +14,7 @@ There is **no LLM**: screens are returned as raw base64 PNG, and the driver sele
 ## Repo Structure
 
 ```
-edge-gui-python-template/
+edge-python-gui-template/
 ├── pyproject.toml    # dependencies (puda, mcp, pydantic-settings)
 ├── main.py           # Config → Driver → EdgeNatsClient → EdgeRunner
 ├── driver.py         # Driver: machine-specific commands built on GuiDriver
