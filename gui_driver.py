@@ -25,6 +25,10 @@ from cua_client import CuaDriverClient
 logger = logging.getLogger(__name__)
 
 
+class ElementNotFoundError(RuntimeError):
+    """A fresh accessibility capture has no enabled match for the selector."""
+
+
 class GuiDriver:
     """
     PUDA GUI driver — controls a desktop instrument application via cua-driver.
@@ -260,13 +264,63 @@ class GuiDriver:
             and element.get("enabled", True)
         ]
         if not matches:
-            raise RuntimeError(f"No enabled element matches label={label!r}, role={role!r}")
+            raise ElementNotFoundError(f"No enabled element matches label={label!r}, role={role!r}")
         if len(matches) > 1:
             raise RuntimeError(
                 f"Ambiguous element: {len(matches)} matches for label={label!r}, role={role!r}. "
                 "Inspect get_elements and specify a unique label and role, or use click_at."
             )
         return dict(matches[0])
+
+    def wait_for_element(
+        self, label: str, role: str = "", timeout: float = 30.0,
+        poll_interval: float = 0.5, error_labels: list[str] | None = None,
+    ) -> dict:
+        """Poll fresh captures for one enabled exact label/role match.
+
+        Known error labels take precedence over success in the same capture.
+        Polling foregrounds the app and invalidates coordinate capture IDs. Input
+        is never retried. An in-flight capture has its own timeout.
+
+        Args:
+            label: Non-empty exact, case-sensitive accessibility label.
+            role: Exact accessibility role, or "" for any role. Defaults to "".
+            timeout: Finite non-negative polling timeout in seconds. Defaults to 30.
+            poll_interval: Finite positive delay between captures in seconds.
+                Defaults to 0.5.
+            error_labels: Exact labels indicating failure, including disabled text.
+                Defaults to None, which disables known-error detection.
+
+        Returns:
+            dict: The uniquely matching enabled element observed before returning.
+
+        Raises:
+            ValueError: label is empty or timing arguments are invalid.
+            TimeoutError: The expected element remains absent at the deadline.
+            RuntimeError: A known error appears, matches are ambiguous, or capture fails.
+        """
+        if not label:
+            raise ValueError("An exact non-empty element label is required")
+        if not math.isfinite(timeout) or timeout < 0:
+            raise ValueError("timeout must be finite and non-negative")
+        if not math.isfinite(poll_interval) or poll_interval <= 0:
+            raise ValueError("poll_interval must be finite and positive")
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                element = self.find_element(label, role)
+            except ElementNotFoundError:
+                element = None
+            errors = [e.get("label") for e in self._cua._last_elements
+                      if e.get("label") in (error_labels or [])]
+            if errors:
+                raise RuntimeError(f"Application reported an error while waiting for {label!r}: {errors}")
+            if element is not None:
+                return element
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"Timed out waiting for label={label!r}, role={role!r}")
+            time.sleep(min(poll_interval, remaining))
 
     @command
     def click_element(self, label: str, role: str = "") -> dict:
