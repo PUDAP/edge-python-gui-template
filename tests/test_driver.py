@@ -10,13 +10,16 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import driver  # noqa: E402
-from driver import CuaDriverClient, GuiDriver  # noqa: E402
+import gui_driver as driver  # noqa: E402
+import cua_client  # noqa: E402
+from cua_client import CuaDriverClient  # noqa: E402
+from driver import Driver  # noqa: E402
+from gui_driver import GuiDriver  # noqa: E402
 
 
 def make_driver(**cua_attrs) -> GuiDriver:
     """A GuiDriver without a real event loop / cua-driver; coroutines run inline."""
-    d = object.__new__(GuiDriver)
+    d = object.__new__(Driver)
     d.target_app = "Demo"
     d._last_status = {}
     d._run = lambda coro: asyncio.run(coro)
@@ -28,7 +31,7 @@ def elem(index, label, role="push button", **extra):
     return {"element_index": index, "label": label, "role": role, **extra}
 
 
-class SomClickTests(unittest.TestCase):
+class ElementClickTests(unittest.TestCase):
     def _driver(self, elements):
         clicked = []
 
@@ -41,23 +44,155 @@ class SomClickTests(unittest.TestCase):
         d = make_driver(capture=capture, click=click, _last_elements=elements, _capture_meta={})
         return d, clicked
 
-    def test_clicks_best_matching_element(self):
+    def test_clicks_exact_matching_element(self):
         d, clicked = self._driver([elem(1, "Cancel run"), elem(2, "Start run"), elem(3, "Start")])
-        self.assertEqual(d._som_click("Start run button"), 2)
+        self.assertEqual(d._click_element("Start run"), 2)
         self.assertEqual(clicked, [2])
 
     def test_raises_when_nothing_matches(self):
         d, clicked = self._driver([elem(1, "Cancel")])
         with mock.patch.object(driver.time, "sleep"):
             with self.assertRaises(RuntimeError):
-                d._som_click("Save")
+                d._click_element("Save")
         self.assertEqual(clicked, [])
 
     def test_ignores_disabled_elements(self):
         d, clicked = self._driver([elem(1, "Start run", enabled=False)])
         with mock.patch.object(driver.time, "sleep"):
             with self.assertRaises(RuntimeError):
-                d._som_click("Start run")
+                d._click_element("Start run")
+
+    def test_rejects_ambiguous_matches(self):
+        d, clicked = self._driver([elem(9, "Start"), elem(2, "Start")])
+        with self.assertRaisesRegex(RuntimeError, "Ambiguous"):
+            d._click_element("Start")
+        self.assertEqual(clicked, [])
+
+    def test_rejects_element_outside_captured_window(self):
+        d, clicked = self._driver([
+            elem(1, "Start", frame={"x": 200, "y": 0, "w": 10, "h": 10}),
+        ])
+        d._cua._capture_meta = {"window_bounds": {"x": 0, "y": 0, "width": 100, "height": 100}}
+        with self.assertRaisesRegex(RuntimeError, "outside the captured window"):
+            d._click_element("Start")
+        self.assertEqual(clicked, [])
+
+    def test_lookup_is_read_only_and_role_disambiguates(self):
+        d, clicked = self._driver([elem(1, "Start", role="text"), elem(2, "Start")])
+        self.assertEqual(len(d.get_elements()["elements"]), 2)
+        self.assertEqual(d.find_element("Start", "push button")["element_index"], 2)
+        self.assertEqual(clicked, [])
+        self.assertEqual(d.click_element("Start", "push button")["clicked_element"], 2)
+        self.assertEqual(clicked, [2])
+
+    def test_lookup_rejects_partial_case_mismatched_and_empty_labels(self):
+        d, clicked = self._driver([elem(1, "Start run")])
+        for label in ("Start", "start run", "Start run button"):
+            with self.subTest(label=label), self.assertRaises(RuntimeError):
+                d.click_element(label)
+        with self.assertRaises(ValueError):
+            d.click_element("")
+        self.assertEqual(clicked, [])
+
+    def test_action_resolves_new_index_after_lookup(self):
+        d, clicked = self._driver([elem(1, "Start")])
+        self.assertEqual(d.find_element("Start")["element_index"], 1)
+        d._cua._last_elements = [elem(8, "Start")]
+        d.click_element("Start")
+        self.assertEqual(clicked, [8])
+
+    def test_set_value_rejects_ambiguity_before_input(self):
+        d, _ = self._driver([elem(1, "Temperature"), elem(2, "Temperature")])
+        d._cua.set_value = mock.AsyncMock()
+        with self.assertRaisesRegex(RuntimeError, "Ambiguous"):
+            d.set_value("Temperature", "37")
+        d._cua.set_value.assert_not_awaited()
+        d._cua._last_elements = [elem(2, "Temperature", role="edit")]
+        d.set_value("Temperature", "37", role="edit")
+        d._cua.set_value.assert_awaited_once_with(2, "37")
+
+    def test_scroll_validates_before_capture_and_dispatch(self):
+        d = make_driver(capture=mock.AsyncMock(return_value=SimpleNamespace(
+            content=[SimpleNamespace(type="image", data="PNG")],
+        )), scroll=mock.AsyncMock())
+        for direction, amount in (("diagonal", 3), ("down", 0), ("up", -1), ("left", 1.5)):
+            with self.subTest(direction=direction, amount=amount), self.assertRaises(ValueError):
+                d.scroll(direction, amount)
+        d._cua.capture.assert_not_awaited()
+        d._cua.scroll.assert_not_awaited()
+        self.assertEqual(d.scroll("down", 2), {"direction": "down", "amount": 2})
+        d._cua.capture.assert_awaited_once()
+        d._cua.scroll.assert_awaited_once_with(direction="down", amount=2)
+
+
+class InputDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_scroll_rejects_noop_result(self):
+        client = CuaDriverClient()
+        client._tools = {"scroll": None}
+        client._call = mock.AsyncMock(return_value=SimpleNamespace(
+            structuredContent={"effect": "suspected_noop"},
+        ))
+        with self.assertRaisesRegex(RuntimeError, "input rejected"):
+            await client.scroll()
+
+    async def test_failed_capture_discards_old_accessibility_snapshot(self):
+        client = CuaDriverClient()
+        client._tools = {"get_window_state": None}
+        client._last_elements = [elem(1, "Old")]
+        client._snapshot_id = "old"
+        client._capture_meta = {"snapshot_id": "old"}
+        client._matching_windows = mock.AsyncMock(side_effect=RuntimeError("gone"))
+        with self.assertRaisesRegex(RuntimeError, "gone"):
+            await client.capture("Demo", mode="som")
+        self.assertEqual(client._last_elements, [])
+        self.assertEqual(client._capture_meta, {})
+        self.assertIsNone(client._snapshot_id)
+
+    async def test_native_actions_target_captured_window(self):
+        client = CuaDriverClient()
+        client._tools = dict.fromkeys(["click", "type_text", "press_key"])
+        client._pid, client._window_id, client._snapshot_id = 10, 20, "snapshot"
+        client._call = mock.AsyncMock(return_value=SimpleNamespace(structuredContent={"ok": True}))
+
+        await client.click(element=3)
+        await client.type_text("hello", delivery_mode=None)
+        await client.key("CTRL+S")
+
+        self.assertEqual(client._call.call_args_list, [
+            mock.call("click", {"button": "left", "pid": 10, "window_id": 20,
+                                "delivery_mode": "foreground", "element_index": 3,
+                                "snapshot_id": "snapshot"}),
+            mock.call("type_text", {"text": "hello", "pid": 10, "window_id": 20}),
+            mock.call("press_key", {"key": "s", "modifiers": ["ctrl"], "pid": 10,
+                                    "window_id": 20, "delivery_mode": "foreground"}),
+        ])
+
+    async def test_native_input_without_capture_omits_target(self):
+        client = CuaDriverClient()
+        client._tools = dict.fromkeys(["click", "type_text", "press_key"])
+        client._call = mock.AsyncMock(return_value=SimpleNamespace())
+        await client.click(x=1, y=2)
+        await client.type_text("hello")
+        await client.key("escape")
+        self.assertEqual(client._call.call_args_list, [
+            mock.call("click", {"button": "left", "x": 1, "y": 2}),
+            mock.call("type_text", {"text": "hello"}),
+            mock.call("press_key", {"key": "escape", "modifiers": []}),
+        ])
+
+    async def test_wrapper_keeps_its_own_argument_schema(self):
+        client = CuaDriverClient()
+        client._tools = {"computer_use": None}
+        client._pid, client._window_id = 10, 20
+        client._call = mock.AsyncMock(return_value=SimpleNamespace())
+        await client.click(element=3)
+        await client.type_text("hello")
+        await client.key("ctrl+s", capture_after=True)
+        self.assertEqual(client._call.call_args_list, [
+            mock.call("computer_use", {"action": "click", "button": "left", "element": 3}),
+            mock.call("computer_use", {"action": "type", "text": "hello"}),
+            mock.call("computer_use", {"action": "key", "keys": "ctrl+s", "capture_after": True}),
+        ])
 
 
 class FileDialogDetectionTests(unittest.TestCase):
@@ -89,6 +224,34 @@ class FileDialogDetectionTests(unittest.TestCase):
 
 
 class ChooseFileTests(unittest.TestCase):
+    def test_windows_dialog_uses_accessibility_or_keyboard_fallback(self):
+        for native in (True, False):
+            with self.subTest(native=native):
+                d = make_driver(
+                    capture=mock.AsyncMock(return_value=SimpleNamespace(
+                        content=[SimpleNamespace(type="image", data="PNG")],
+                    )),
+                    _last_elements=[
+                        elem(1, "File name:", role="edit"),
+                        elem(2, "Open", role="button", actions=["invoke"], frame={"w": 5, "h": 5}),
+                        elem(3, "Open", role="splitbutton", actions=["invoke"], frame={"w": 20, "h": 10}),
+                    ],
+                    _tools={"set_value": None} if native else {},
+                    set_value=mock.AsyncMock(), click=mock.AsyncMock(),
+                    type_text=mock.AsyncMock(), key=mock.AsyncMock(),
+                )
+                dialog = {"title": "Open", "app_name": "Demo"}
+                with mock.patch.object(d, "_wait_file_dialog", side_effect=[dialog, None]):
+                    d._choose_file_in_dialog("C:/protocol.py")
+                if native:
+                    d._cua.set_value.assert_awaited_once_with(1, "C:/protocol.py")
+                    d._cua.click.assert_awaited_once_with(element=3)
+                    d._cua.type_text.assert_not_awaited()
+                else:
+                    d._cua.type_text.assert_awaited_once_with("C:/protocol.py", delivery_mode="foreground")
+                    d._cua.key.assert_awaited_once_with("return", delivery_mode="foreground")
+                    d._cua.click.assert_not_awaited()
+
     def test_portal_dialog_gets_ctrl_l_path_enter(self):
         dialog = {"title": "Open Files", "app_name": "xdg-desktop-portal-gnome",
                   "pid": 10, "window_id": 20}
@@ -186,9 +349,9 @@ class StartupEnvTests(unittest.TestCase):
 
         env = {"DISPLAY": ":7", "XAUTHORITY": "/tmp/xauth", "XDG_RUNTIME_DIR": "/run/user/9"}
         with mock.patch.dict(os.environ, env, clear=False), \
-             mock.patch.object(driver.shutil, "which", return_value="/usr/bin/cua-driver"), \
-             mock.patch.object(driver, "stdio_client", fake_stdio_client), \
-             mock.patch.object(driver, "ClientSession", FakeSession):
+             mock.patch.object(cua_client.shutil, "which", return_value="/usr/bin/cua-driver"), \
+             mock.patch.object(cua_client, "stdio_client", fake_stdio_client), \
+             mock.patch.object(cua_client, "ClientSession", FakeSession):
             asyncio.run(CuaDriverClient().start())
 
         self.assertEqual(captured["env"]["DISPLAY"], ":7")
@@ -196,27 +359,27 @@ class StartupEnvTests(unittest.TestCase):
         self.assertEqual(captured["env"]["PYTHONUTF8"], "1")
 
     def test_missing_cua_driver_gives_clear_error(self):
-        with mock.patch.object(driver.shutil, "which", return_value=None):
+        with mock.patch.object(cua_client.shutil, "which", return_value=None):
             with self.assertRaisesRegex(RuntimeError, "cua-driver not found"):
                 asyncio.run(CuaDriverClient().start())
 
 
 class CommandSurfaceTests(unittest.TestCase):
     def test_internal_helpers_are_not_public(self):
-        public = {n for n in dir(GuiDriver) if not n.startswith("_")}
+        public = {n for n in dir(Driver) if not n.startswith("_")}
         # reset/shutdown are lifecycle helpers; everything else public is a command
         self.assertEqual(
             public - {"reset", "shutdown"},
-            {"status", "capture_screenshot", "ask_screen", "find_and_click",
-             "type_text", "press_key", "click_at"},
+            {"capture_screenshot", "get_elements", "find_element", "click_element",
+             "set_value", "scroll", "type_text", "press_key", "click_at"},
         )
 
-    def test_status_returns_screenshot_without_llm(self):
+    def test_capture_returns_screenshot_without_caching_image(self):
         async def capture(app=None, mode="screenshot"):
             return SimpleNamespace(content=[SimpleNamespace(type="image", data="PNGDATA")])
 
         d = make_driver(capture=capture)
-        result = d.status()
+        result = d.capture_screenshot()
         self.assertEqual(result["image_b64"], "PNGDATA")
         self.assertNotIn("image_b64", d._snapshot()["last_status"])  # state stays small
 

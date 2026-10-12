@@ -29,7 +29,7 @@ from puda import EdgeNatsClient, EdgeRunner
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from driver import GuiDriver
+from driver import Driver
 
 # ── logging ────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -98,8 +98,8 @@ async def main() -> None:
     logger.info("  target_app   : %s", config.target_app)
     logger.info("================================")
 
-    logger.info("Initialising GuiDriver for %r…", config.target_app)
-    driver = GuiDriver(target_app=config.target_app)
+    logger.info("Initialising Driver for %r…", config.target_app)
+    driver = Driver(target_app=config.target_app)
     driver._startup()   # connects to cua-driver MCP, lists available tools
 
     logger.info("Connecting to NATS at %s…", config.nats_servers)
