@@ -57,8 +57,7 @@ class Driver(GuiDriver):
                 Defaults to 30.
 
         Returns:
-            dict: imported_file, completion (the observed element), image_b64,
-            and the copied capture context.
+            dict: imported_file, returned only after the success indicator is observed.
 
         Raises:
             ValueError: A required path or label is empty, or timeout is invalid.
@@ -84,10 +83,10 @@ class Driver(GuiDriver):
         self.wait_for_element("Browse", timeout=timeout, error_labels=["Import failed"])
         self.click_element("Browse")
         self._choose_file_in_dialog(file_path, timeout=timeout)
-        completed = self.wait_for_element(
+        self.wait_for_element(
             success_label, success_role, timeout=timeout, error_labels=["Import failed"],
         )
-        return {"imported_file": file_path, "completion": completed, **self.capture_screenshot()}
+        return {"imported_file": file_path}
 
     # ── Low-level GUI commands ─────────────────────────────────────────────
     # Explicit remote access for exploration and debugging. Implement reusable

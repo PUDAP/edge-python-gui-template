@@ -206,6 +206,8 @@ Use Google-style docstrings for every public operation and command: a one-senten
 
 PUDA reports success when a command returns. Each command must define what that return proves. A successful click, closed file dialog, or elapsed sleep does not prove the instrument completed an operation.
 
+`import_file` calls `wait_for_element` for verification and returns only `{"imported_file": file_path}` after that check succeeds. Failed verification raises instead of returning a false result. The command does not take an extra screenshot after verification; request `capture_screenshot` separately when visual feedback is needed.
+
 1. Check preconditions before input: the correct application state, required controls, and machine-specific constraints.
 2. Choose a success indicator tied to this operation, such as the expected method name together with a loaded status. Avoid generic Ready labels or filenames that appear while a file is merely selected. Inspect actual accessibility labels and roles; the template's `Loaded method.xml` and `Import failed` are examples to replace.
 3. Rule out stale success. The import example rejects a success label already present before input. Applications that retain status must instead use a job ID, state transition, or another operation-specific check.

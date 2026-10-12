@@ -434,17 +434,14 @@ class CommandSurfaceTests(unittest.TestCase):
         calls.find.side_effect = ElementNotFoundError("absent")
         d.wait_for_element = calls.wait
         calls.wait.return_value = {"label": "Loaded method.xml"}
-        calls.capture.return_value = {"image_b64": "PNG", "capture": None}
         self.assertEqual(d.import_file("/tmp/method.xml", "Loaded method.xml"), {
-            "imported_file": "/tmp/method.xml", "completion": {"label": "Loaded method.xml"},
-            "image_b64": "PNG", "capture": None,
+            "imported_file": "/tmp/method.xml",
         })
         self.assertEqual(calls.mock_calls, [
             mock.call.find("Loaded method.xml", ""), mock.call.click("Import"),
             mock.call.wait("Browse", timeout=30.0, error_labels=["Import failed"]),
             mock.call.click("Browse"), mock.call.choose("/tmp/method.xml", timeout=30.0),
             mock.call.wait("Loaded method.xml", "", timeout=30.0, error_labels=["Import failed"]),
-            mock.call.capture(),
         ])
         calls.reset_mock()
         with self.assertRaises(ValueError):
