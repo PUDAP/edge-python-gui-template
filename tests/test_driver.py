@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from puda.command import resolve_command_names
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -14,7 +15,7 @@ import gui_driver as driver  # noqa: E402
 import cua_client  # noqa: E402
 from cua_client import CuaDriverClient  # noqa: E402
 from driver import Driver  # noqa: E402
-from gui_driver import GuiDriver  # noqa: E402
+from gui_driver import ElementNotFoundError, GuiDriver  # noqa: E402
 
 
 def make_driver(**cua_attrs) -> GuiDriver:
@@ -414,14 +415,56 @@ class StartupEnvTests(unittest.TestCase):
 
 
 class CommandSurfaceTests(unittest.TestCase):
-    def test_internal_helpers_are_not_public(self):
-        public = {n for n in dir(Driver) if not n.startswith("_")}
-        # Every public method is a command; cleanup is internal.
+    def test_only_explicit_machine_commands_are_remote(self):
         self.assertEqual(
-            public,
-            {"capture_screenshot", "get_elements", "find_element", "click_element",
-             "set_value", "scroll", "type_text", "press_key", "click_at"},
+            resolve_command_names(object.__new__(Driver)),
+            {"capture_screenshot", "get_elements", "find_element", "wait_for_element",
+             "click_element", "set_value", "type_text", "scroll", "press_key",
+             "click_at", "import_file"},
         )
+        self.assertEqual(resolve_command_names(object.__new__(GuiDriver)), set())
+
+    def test_example_import_composes_gui_operations(self):
+        d = make_driver()
+        calls = mock.Mock()
+        d.click_element = calls.click
+        d._choose_file_in_dialog = calls.choose
+        d.capture_screenshot = calls.capture
+        d.find_element = calls.find
+        calls.find.side_effect = ElementNotFoundError("absent")
+        d.wait_for_element = calls.wait
+        calls.wait.return_value = {"label": "Loaded method.xml"}
+        calls.capture.return_value = {"image_b64": "PNG", "capture": None}
+        self.assertEqual(d.import_file("/tmp/method.xml", "Loaded method.xml"), {
+            "imported_file": "/tmp/method.xml", "completion": {"label": "Loaded method.xml"},
+            "image_b64": "PNG", "capture": None,
+        })
+        self.assertEqual(calls.mock_calls, [
+            mock.call.find("Loaded method.xml", ""), mock.call.click("Import"),
+            mock.call.wait("Browse", timeout=30.0, error_labels=["Import failed"]),
+            mock.call.click("Browse"), mock.call.choose("/tmp/method.xml", timeout=30.0),
+            mock.call.wait("Loaded method.xml", "", timeout=30.0, error_labels=["Import failed"]),
+            mock.call.capture(),
+        ])
+        calls.reset_mock()
+        with self.assertRaises(ValueError):
+            d.import_file("  ", "Loaded method.xml")
+        self.assertEqual(calls.mock_calls, [])
+
+    def test_import_rejects_stale_success_and_does_not_hide_timeout(self):
+        d = make_driver()
+        d.find_element = mock.Mock(return_value={"label": "Loaded"})
+        d.click_element = mock.Mock()
+        with self.assertRaisesRegex(RuntimeError, "already exists"):
+            d.import_file("/tmp/file", "Loaded")
+        d.click_element.assert_not_called()
+        d.find_element.side_effect = ElementNotFoundError("absent")
+        d.wait_for_element = mock.Mock(side_effect=[{}, TimeoutError("not loaded")])
+        d._choose_file_in_dialog = mock.Mock()
+        d.capture_screenshot = mock.Mock()
+        with self.assertRaisesRegex(TimeoutError, "not loaded"):
+            d.import_file("/tmp/file", "Loaded")
+        d.capture_screenshot.assert_not_called()
 
     def test_capture_returns_screenshot_without_caching_image(self):
         async def capture(app=None, include_elements=False):

@@ -18,8 +18,6 @@ from concurrent.futures import Future
 from copy import deepcopy
 from typing import Any
 
-from puda import command
-
 from cua_client import CuaDriverClient
 
 logger = logging.getLogger(__name__)
@@ -34,7 +32,8 @@ class GuiDriver:
     PUDA GUI driver — controls a desktop instrument application via cua-driver.
 
     Follows the PUDA 0.1.x edge contract:
-      * Only methods marked ``@command`` are remotely callable.
+      * This class exposes no remote commands. Subclasses in ``driver.py``
+        choose remote operations using ``@command``.
       * Internal helpers, startup, cached state and telemetry use a leading
         underscore (``main.py`` passes ``_snapshot`` to ``EdgeRunner`` as the
         state handler).
@@ -135,7 +134,7 @@ class GuiDriver:
                 and window["y"] <= cy < window["y"] + window["height"]):
             raise RuntimeError(
                 f"Accessibility coordinates for {description!r} are outside the captured window. "
-                "Use the click_at command with coordinates taken from a fresh screenshot."
+                "Use click_at with coordinates taken from a fresh screenshot."
             )
 
     # ── native file-dialog helpers ─────────────────────────────────────────
@@ -218,16 +217,23 @@ class GuiDriver:
 
         self._wait_file_dialog(appear=False, timeout=timeout)
 
-    # ── base PUDA commands (generic — work for any application) ────────────
+    # ── GUI operations (remote exposure belongs in driver.py) ─────────────
 
-    @command
     def capture_screenshot(self, include_elements: bool = False) -> dict:
-        """Return a PNG and a copied capture context for coordinate clicks.
+        """Capture a PNG and a copied context for coordinate clicks.
 
-        capture is None when the backend cannot provide window identity and
-        geometry. Pass capture["capture_id"] to click_at; any later capture or
-        input invalidates the ID.
-        Set include_elements=True to refresh accessibility elements as well.
+        Capturing foregrounds the app and invalidates earlier capture IDs.
+
+        Args:
+            include_elements: Refresh accessibility elements as well. Defaults to False.
+
+        Returns:
+            dict: image_b64 and capture. capture contains capture_id, pid, window_id,
+            bounds, width, and height, or is None when coordinate input is unavailable.
+
+        Raises:
+            TypeError: include_elements is not a bool.
+            RuntimeError: Capture fails, returns no image, or cannot provide requested elements.
         """
         result = self._run(self._cua.capture(
             app=self.target_app, include_elements=include_elements,
@@ -241,18 +247,37 @@ class GuiDriver:
         self._last_status = {"captured_at": time.time()}
         return {"image_b64": img, "capture": deepcopy(self._cua._coordinate_capture)}
 
-    @command
     def get_elements(self) -> dict:
-        """Capture the current accessibility elements, including labels and roles."""
+        """Capture the application's current accessibility elements.
+
+        Capturing invalidates earlier coordinate capture IDs.
+
+        Returns:
+            dict: elements, a list of accessibility records with labels, roles,
+            indices, and any additional fields supplied by the backend.
+
+        Raises:
+            RuntimeError: The backend cannot capture the image or accessibility elements.
+        """
         self.capture_screenshot(include_elements=True)
         return {"elements": self._cua._last_elements}
 
-    @command
     def find_element(self, label: str, role: str = "") -> dict:
-        """Find one enabled element using an exact label and optional exact role.
+        """Find one enabled element by exact, case-sensitive label and optional role.
 
-        Matching is case-sensitive. Missing or ambiguous matches raise.
-        Element indices describe this capture only; actions resolve a fresh match.
+        Element indices belong to this fresh capture only.
+
+        Args:
+            label: Non-empty exact accessibility label.
+            role: Exact accessibility role, or "" to match any role. Defaults to "".
+
+        Returns:
+            dict: A copy of the uniquely matching accessibility element.
+
+        Raises:
+            ValueError: label is empty.
+            ElementNotFoundError: No enabled element matches.
+            RuntimeError: Multiple elements match or capture fails.
         """
         if not label:
             raise ValueError("An exact non-empty element label is required")
@@ -322,11 +347,24 @@ class GuiDriver:
                 raise TimeoutError(f"Timed out waiting for label={label!r}, role={role!r}")
             time.sleep(min(poll_interval, remaining))
 
-    @command
     def click_element(self, label: str, role: str = "") -> dict:
-        """Click one enabled element by exact label and optional exact role.
+        """Click one enabled element by exact, case-sensitive label and optional role.
 
-        Missing or ambiguous matches raise without sending input.
+        Resolve the element from a fresh capture and send one click. Successful
+        delivery alone does not confirm completion of the application's operation.
+
+        Args:
+            label: Non-empty exact accessibility label.
+            role: Exact accessibility role, or "" for any role. Defaults to "".
+
+        Returns:
+            dict: clicked_element index, label, and role.
+
+        Raises:
+            ValueError: label is empty.
+            ElementNotFoundError: No enabled element matches.
+            RuntimeError: Matches are ambiguous, coordinates are outside the window,
+                capture fails, or input is rejected.
         """
         selected = self.find_element(label, role)
         self._validate_element_position(selected, label)
@@ -334,29 +372,63 @@ class GuiDriver:
         self._run(self._cua.click(element=index))
         return {"clicked_element": index, "label": label, "role": role}
 
-    @command
     def set_value(self, label: str, value: str, role: str = "") -> dict:
-        """Set a unique enabled field by exact label and optional exact role.
+        """Set a uniquely matched field through native accessibility.
 
-        Requires native cua-driver set_value support. Raises on missing or
-        ambiguous matches or rejected input; does not fall back to typing.
+        Requires native set_value support and does not fall back to typing.
+        Verify the application-specific result after setting the field.
+
+        Args:
+            label: Non-empty exact, case-sensitive accessibility label.
+            value: Text value to assign to the field.
+            role: Exact accessibility role, or "" for any role. Defaults to "".
+
+        Returns:
+            dict: label, role, and the submitted value.
+
+        Raises:
+            ValueError: label is empty.
+            ElementNotFoundError: No enabled element matches.
+            RuntimeError: Matches are ambiguous, capture fails, native setting is
+                unavailable, or input is rejected.
         """
         element = self.find_element(label, role)
         self._run(self._cua.set_value(int(element["element_index"]), value))
         return {"label": label, "role": role, "value": value}
 
-    @command
     def type_text(self, text: str) -> dict:
-        """Type text into the focused control; use click_element to select it first."""
+        """Type text into the focused control.
+
+        Select the intended control with click_element before typing.
+
+        Args:
+            text: Text to send to the currently focused control.
+
+        Returns:
+            dict: typed, containing the submitted text.
+
+        Raises:
+            RuntimeError: The backend cannot dispatch typing or rejects the input.
+        """
         self._run(self._cua.type_text(text))
         return {"typed": text}
 
-    @command
     def scroll(self, direction: str = "down", amount: int = 3) -> dict:
         """Scroll the foreground target application.
 
-        direction must be up, down, left, or right. amount is a positive integer
-        in the units used by the installed cua-driver.
+        Capture the target before scrolling. This invalidates earlier capture IDs.
+
+        Args:
+            direction: One of "up", "down", "left", or "right". Defaults to "down".
+            amount: Positive integer in the installed backend's scroll units.
+                Defaults to 3.
+
+        Returns:
+            dict: direction and amount submitted to the backend.
+
+        Raises:
+            ValueError: direction or amount is invalid.
+            RuntimeError: Capture fails, scrolling is unavailable, or input is rejected.
         """
         if direction not in {"up", "down", "left", "right"}:
             raise ValueError("direction must be up, down, left, or right")
@@ -366,27 +438,39 @@ class GuiDriver:
         self._run(self._cua.scroll(direction=direction, amount=amount))
         return {"direction": direction, "amount": amount}
 
-    @command
     def press_key(self, keys: str) -> dict:
-        """
-        Press a keyboard shortcut in the target application.
+        """Press a key or shortcut in the target application.
 
         Args:
-            keys: Key combination, e.g. 'escape', 'ctrl+s', 'f5'.
+            keys: Key combination, for example "escape", "ctrl+s", or "f5".
 
         Returns:
-            dict: {'keys': str}
+            dict: keys, containing the submitted key combination.
+
+        Raises:
+            RuntimeError: The backend cannot dispatch the key or rejects the input.
         """
         self._run(self._cua.key(keys))
         return {"keys": keys}
 
-    @command
     def click_at(self, x: int, y: int, capture_id: str) -> dict:
-        """Click screenshot pixels using the capture_id returned by capture_screenshot.
+        """Click pixels from a specific screenshot without recapturing or retrying.
 
-        Requires the same visible window and geometry. The ID is single-use;
-        later captures or input invalidate it. Does not move the window, capture
-        another image, or retry input. Capture separately to inspect the result.
+        Requires the same visible window and geometry. The capture ID is single-use
+        and invalidated by later captures or input. Capture separately for feedback.
+
+        Args:
+            x: Integer horizontal screenshot pixel coordinate, 0 <= x < capture width.
+            y: Integer vertical screenshot pixel coordinate, 0 <= y < capture height.
+            capture_id: ID from capture_screenshot()["capture"]["capture_id"].
+
+        Returns:
+            dict: x, y, capture_id, and the reported input effect (or "unverifiable").
+
+        Raises:
+            ValueError: Coordinates are not integers inside the referenced screenshot.
+            RuntimeError: The ID is stale or unknown, the window changed or disappeared,
+                or foregrounding or clicking is rejected.
         """
         result = self._run(self._cua.click_at(x=x, y=y, capture_id=capture_id))
         return {"x": x, "y": y, "capture_id": capture_id,

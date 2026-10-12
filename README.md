@@ -18,7 +18,7 @@ edge-gui-python-template/
 ├── pyproject.toml    # dependencies (puda, mcp, pydantic-settings)
 ├── main.py           # Config → Driver → EdgeNatsClient → EdgeRunner
 ├── driver.py         # Driver: machine-specific commands built on GuiDriver
-├── gui_driver.py     # GuiDriver: reusable GUI helpers, lifecycle and generic commands
+├── gui_driver.py     # GuiDriver: undecorated GUI operations and lifecycle
 ├── cua_client.py     # CuaDriverClient: MCP connection, window discovery and input
 ├── tests/            # offline tests for the generic logic
 ├── .env.example      # environment variable template
@@ -134,13 +134,18 @@ docker compose -f compose.yml up -d --build
 
 ---
 
-## PUDA Commands (generic)
+## GUI operations and remote commands
 
-| Command | Description |
+`driver.py` starts with an explicit constructor calling `super().__init__(target_app=target_app)`, followed by high-level machine commands and then low-level GUI commands. The high-level section contains workflows such as `import_file`, including preconditions and completion checks. The low-level section contains thin delegates for inspection and individual actions. Add new instrument workflows to the high-level section.
+
+`GuiDriver` has no `@command` decorators. Its methods below are ordinary Python operations available to machine code. The example `Driver` explicitly exposes all of them through decorated overrides, alongside `import_file`. This lets an agent inspect the live GUI, test individual steps, and build high-level machine commands with verified completion. Adapt the import workflow's labels and completion checks before using it. Remove any decorated overrides that a deployed machine does not need; the inherited Python operations remain available internally.
+
+| Python operation | Description |
 |---|---|
 | `capture_screenshot` | Return `image_b64` and a copied `capture` context (or null) |
 | `get_elements` | Inspect current accessibility elements, labels, and roles |
 | `find_element` | Find one enabled exact label/role match; reject ambiguity |
+| `wait_for_element` | Poll for an exact enabled match; raise on timeout or known error indicators |
 | `click_element` | Resolve and click one exact label/role match from a fresh capture |
 | `set_value` | Set a uniquely matched field through native accessibility |
 | `scroll` | Scroll up, down, left, or right by a positive amount |
@@ -154,10 +159,12 @@ Constructing `Driver` connects the MCP client. `main.py` calls internal `_close(
 
 ```bash
 puda machine run my-instrument capture_screenshot
-puda machine run my-instrument click_element --label "Start Run"
-puda machine run my-instrument click_element --label "temperature setpoint"
-puda machine run my-instrument type_text --text "37.5"
-puda machine run my-instrument press_key --keys "ctrl+s"
+puda machine run my-instrument get_elements
+puda machine run my-instrument find_element --label "Import"
+puda machine run my-instrument click_element --label "Import"
+puda machine run my-instrument wait_for_element --label "Browse" --timeout 15
+# After adapting the example workflow to your instrument:
+puda machine run my-instrument import_file --file_path "/path/on/desktop/method.xml" --success_label "Loaded method.xml"
 ```
 
 ---
@@ -178,7 +185,7 @@ Matching considers enabled elements only. Missing or duplicate matches raise bef
 
 1. **Copy the template** and install: `git clone … my-machine-guidriver && cd my-machine-guidriver && uv sync`.
 2. **Set `.env`**: `MACHINE_ID`, `NATS_SERVERS`, `TARGET_APP`.
-3. **Add the machine's commands** to `Driver` in `driver.py`. It subclasses `GuiDriver` from `gui_driver.py` and inherits the generic GUI commands and these helpers:
+3. **Add the machine's commands** to `Driver` in `driver.py` and decorate them with `@command`. It subclasses `GuiDriver` and explicitly publishes its public operations through decorated overrides. The private file-dialog helper remains internal. Build machine commands from these operations:
 
    | Helper | Use |
    |---|---|
@@ -188,19 +195,28 @@ Matching considers enabled elements only. Missing or duplicate matches raise bef
    | `self.capture_screenshot()["image_b64"]` | raw base64 PNG of the window |
    | `self.capture_screenshot(include_elements=True)` | PNG plus a refreshed accessibility element cache |
 
-   ```python
-   @command
-   def import_file(self, file_path: str) -> dict:
-       """Import a file through the app's Import button."""
-       self.click_element("Import")
-       time.sleep(1.0)
-       self.click_element("Browse")
-       self._choose_file_in_dialog(file_path)
-       return {"file_path": file_path, "image_b64": self.capture_screenshot()["image_b64"]}
-   ```
+   See `Driver.import_file` for an executable example that checks for stale success, waits for Browse, submits the file, and waits for the operation's completion indicator. `success_label` is explicit in this template; a production driver should derive it from the requested file or encode an application-specific completion check.
 
 4. **Rename the driver class if you like** (e.g. `HplcDriver`) and update the import in `main.py`. Keep machine-specific commands in `driver.py`; `gui_driver.py` provides reusable automation helpers and `cua_client.py` handles the MCP transport and desktop input. If you override the constructor, call `super().__init__(target_app)`.
 5. **Run the tests** (`uv run python -m unittest discover -s tests`) and try each command against the real app.
+
+### Building commands that confirm completion
+
+Use Google-style docstrings for every public operation and command: a one-sentence summary, relevant behavior or preconditions, `Args:` describing every parameter (including units, limits, and defaults), `Returns:` naming the returned fields, and `Raises:` for expected failures. Omit `Args:` for parameterless methods. Keep command docstrings self-contained because PUDA publishes them in the command catalog. See `Driver.import_file` for the complete format; do not put YAML fences inside Python docstrings.
+
+PUDA reports success when a command returns. Each command must define what that return proves. A successful click, closed file dialog, or elapsed sleep does not prove the instrument completed an operation.
+
+1. Check preconditions before input: the correct application state, required controls, and machine-specific constraints.
+2. Choose a success indicator tied to this operation, such as the expected method name together with a loaded status. Avoid generic Ready labels or filenames that appear while a file is merely selected. Inspect actual accessibility labels and roles; the template's `Loaded method.xml` and `Import failed` are examples to replace.
+3. Rule out stale success. The import example rejects a success label already present before input. Applications that retain status must instead use a job ID, state transition, or another operation-specific check.
+4. Perform each action once. Wait for controls to become available between steps. `wait_for_element(label, role="", timeout=30, poll_interval=0.5, error_labels=[...])` captures fresh accessibility data and returns only one enabled exact match. It raises `TimeoutError` when absent; ambiguity and capture failures propagate immediately. Known error labels in the same capture take precedence over success, including disabled error text.
+5. Return evidence after verification, such as the loaded method, observed status, or run ID. Raise on failure or timeout; returning `False` is still a successful PUDA response. Do not automatically repeat imports or start actions after a timeout: inspect the current state first.
+
+The import example checks for a new exact success label after the dialog closes. It can only prove what that indicator means in your application. If completion requires multiple conditions (for example, loading has stopped and the correct method is active), implement that check in `driver.py`. If the application exposes no reliable accessibility status, use an application API, output artifact, or an explicit external verification step instead of reporting unverified success.
+
+Define long-running operations precisely: `start_run` can return after observing Running, while `wait_for_run_completion` waits for the experiment to finish. Timeouts are per wait phase, not a total command deadline; an in-flight capture has its own timeout. Polling foregrounds the application and invalidates coordinate capture IDs.
+
+Test delayed success, stale indicators, disabled controls, ambiguous matches, known errors, capture failures, and timeouts with mocked observations. Then validate against the real instrument application; offline tests cannot establish that a label actually means success.
 
 ### Telemetry
 
@@ -210,7 +226,7 @@ The base driver does not schedule screenshot telemetry. A machine that needs it 
 
 ## Things to Know
 
-- **The app repaints slowly.** After a click, wait (about 5–15 s on a slow app) before trusting a fresh screenshot. `_wait_file_dialog` already polls for up to 15 s.
+- **The app repaints slowly.** Wait for an expected UI state with a bounded timeout rather than assuming a fixed sleep proves completion. `_wait_file_dialog` polls for dialog appearance and disappearance.
 - **Prefer `click_element` over pixels.** Use `click_at` only with coordinates taken from a fresh screenshot.
 - **Windows and Linux differ only at the edges:** the file-chooser (handled by `_choose_file_in_dialog`) and how the window is found. Page-level checks that rely on an app exposing its URL do not work on Linux accessibility trees; verify the screen instead.
 
