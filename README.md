@@ -184,6 +184,7 @@ Matching considers enabled elements only. Missing or duplicate matches raise bef
    | `self._run(self._cua.key("ctrl+s"))` / `type_text(...)` / `click(...)` | raw input |
    | `self._choose_file_in_dialog(path)` | fill a native file dialog (Windows *Open* or GNOME *Open Files*) after your code has clicked Import/Browse |
    | `self._screenshot()` | raw base64 PNG of the window |
+   | `self._screenshot(include_elements=True)` | PNG plus a refreshed accessibility element cache |
 
    ```python
    @command

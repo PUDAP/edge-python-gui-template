@@ -97,9 +97,11 @@ class GuiDriver:
 
     # ── generic GUI helpers ────────────────────────────────────────────────
 
-    def _screenshot(self, mode: str = "screenshot") -> str:
-        """Capture the target window; returns base64 PNG. mode='som' refreshes element list."""
-        result = self._run(self._cua.capture(app=self.target_app, mode=mode))
+    def _screenshot(self, include_elements: bool = False) -> str:
+        """Return a base64 PNG; optionally refresh accessibility elements as well."""
+        result = self._run(self._cua.capture(
+            app=self.target_app, include_elements=include_elements,
+        ))
         img = CuaDriverClient.extract_image_b64(result)
         if img is None:
             raise RuntimeError(
@@ -112,7 +114,7 @@ class GuiDriver:
         """Find one enabled element by exact, case-sensitive label and optional role."""
         if not label:
             raise ValueError("An exact non-empty element label is required")
-        self._screenshot(mode="som")
+        self._screenshot(include_elements=True)
         matches = [
             element for element in self._cua._last_elements
             if element.get("label") == label
@@ -152,7 +154,7 @@ class GuiDriver:
         return index
 
     def _element_labels(self) -> list[str]:
-        """Labels of the elements from the latest ``mode='som'`` capture (for debugging)."""
+        """Labels from the latest capture with include_elements=True (for debugging)."""
         return [str(e.get("label", "")) for e in self._cua._last_elements if e.get("label")]
 
     # ── native file-dialog helpers ─────────────────────────────────────────
@@ -204,7 +206,7 @@ class GuiDriver:
 
     def _type_into_windows_dialog(self, file_path: str) -> None:
         """Fill the Windows filename field, falling back to foreground typing."""
-        self._screenshot()  # select the modal dialog before sending input
+        self._screenshot(include_elements=True)  # select the modal and inspect its fields
         elements = getattr(self._cua, "_last_elements", [])
         filename_fields = [
             e for e in elements
@@ -270,7 +272,7 @@ class GuiDriver:
     @command
     def get_elements(self) -> dict:
         """Capture the current accessibility elements, including labels and roles."""
-        self._screenshot(mode="som")
+        self._screenshot(include_elements=True)
         return {"elements": self._cua._last_elements}
 
     @command

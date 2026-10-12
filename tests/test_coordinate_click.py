@@ -108,6 +108,43 @@ class CoordinateClickTests(unittest.IsolatedAsyncioTestCase):
         await self.client.capture("Demo")
         self.assertIsNone(self.client._coordinate_capture)
 
+    async def test_native_capture_requests_elements_only_when_enabled(self):
+        elements = [{"element_index": 1, "label": "Start"}]
+        self.result.structuredContent["elements"] = elements
+        for include_elements in (True, False):
+            with self.subTest(include_elements=include_elements):
+                self.client._call.reset_mock()
+                await self.client.capture("Demo", include_elements=include_elements)
+                self.client._call.assert_awaited_once_with("get_window_state", {
+                    "pid": 1, "window_id": 2, "include_screenshot": True,
+                    "include_accessibility_tree": include_elements,
+                })
+                self.assertEqual(self.client._last_elements, elements if include_elements else [])
+
+    async def test_wrapper_translates_boolean_to_backend_mode(self):
+        self.client._tools = {"computer_use": None}
+        self.result.structuredContent["elements"] = [{"element_index": 1}]
+        self.client._call = mock.AsyncMock(return_value=self.result)
+        for include_elements, mode in ((True, "som"), (False, "screenshot")):
+            with self.subTest(include_elements=include_elements):
+                await self.client.capture("Demo", include_elements=include_elements)
+                self.client._call.assert_awaited_with("computer_use", {
+                    "action": "capture", "mode": mode, "app": "Demo",
+                })
+                self.assertEqual(bool(self.client._last_elements), include_elements)
+
+    async def test_screenshot_only_backend_rejects_element_request(self):
+        self.client._tools = {"screenshot": None}
+        with self.assertRaisesRegex(RuntimeError, "does not support accessibility"):
+            await self.client.capture("Demo", include_elements=True)
+        self.client._call.assert_not_awaited()
+        self.assertEqual(self.client._last_elements, [])
+
+    async def test_capture_rejects_non_boolean_flag(self):
+        with self.assertRaisesRegex(TypeError, "must be a bool"):
+            await self.client.capture("Demo", include_elements="som")
+        self.client._call.assert_not_awaited()
+
 
 class CoordinateCommandTests(unittest.TestCase):
     def test_command_returns_capture_id_and_click_does_not_capture(self):

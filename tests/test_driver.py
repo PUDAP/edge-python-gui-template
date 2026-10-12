@@ -35,7 +35,7 @@ class ElementClickTests(unittest.TestCase):
     def _driver(self, elements):
         clicked = []
 
-        async def capture(app=None, mode="screenshot"):
+        async def capture(app=None, include_elements=False):
             return SimpleNamespace(content=[SimpleNamespace(type="image", data="AAAA")])
 
         async def click(element=None, **kw):
@@ -143,7 +143,7 @@ class InputDispatchTests(unittest.IsolatedAsyncioTestCase):
         client._capture_meta = {"snapshot_id": "old"}
         client._matching_windows = mock.AsyncMock(side_effect=RuntimeError("gone"))
         with self.assertRaisesRegex(RuntimeError, "gone"):
-            await client.capture("Demo", mode="som")
+            await client.capture("Demo", include_elements=True)
         self.assertEqual(client._last_elements, [])
         self.assertEqual(client._capture_meta, {})
         self.assertIsNone(client._snapshot_id)
@@ -375,7 +375,7 @@ class CommandSurfaceTests(unittest.TestCase):
         )
 
     def test_capture_returns_screenshot_without_caching_image(self):
-        async def capture(app=None, mode="screenshot"):
+        async def capture(app=None, include_elements=False):
             return SimpleNamespace(content=[SimpleNamespace(type="image", data="PNGDATA")])
 
         d = make_driver(capture=capture)

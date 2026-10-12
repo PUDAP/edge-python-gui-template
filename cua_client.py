@@ -239,19 +239,29 @@ class CuaDriverClient:
             args["delivery_mode"] = delivery_mode
         return args
 
-    async def capture(self, app: str | None = None, mode: str = "screenshot") -> Any:
-        """Capture a window. mode='som' also refreshes the accessibility element list."""
+    async def capture(self, app: str | None = None, include_elements: bool = False) -> Any:
+        """Capture an image and optionally refresh accessibility elements.
+
+        Native capture uses include_accessibility_tree; the Hermes wrapper uses
+        its som mode. Screenshot-only tools cannot fulfill element requests.
+        """
+        if not isinstance(include_elements, bool):
+            raise TypeError("include_elements must be a bool")
         self._coordinate_capture = None
         self._snapshot_id = None
         self._last_elements = []
         self._capture_meta = {}
-        tool = self._resolve(self._CAPTURE_TOOLS)
+        candidates = ["computer_use", "get_window_state"] if include_elements else self._CAPTURE_TOOLS
+        if include_elements and not any(name in self._tools for name in candidates):
+            raise RuntimeError("The capture backend does not support accessibility elements")
+        tool = self._resolve(candidates)
         if tool == "get_window_state":
             if not app:
                 raise RuntimeError("An app name is required for window capture")
 
             # Electron can leave a second blank top-level window behind. Inspect
-            # every matching window and use the one with the richest UI tree.
+            # matching windows, preferring modals, then element count when
+            # requested, then image size.
             candidates: list[tuple[int, int, int, Any, dict[str, Any], int, int]] = []
             for window in await self._matching_windows(app):
                 window = await self._make_window_visible(window)
@@ -260,11 +270,11 @@ class CuaDriverClient:
                 result = await self._call(tool, {
                     "pid": pid,
                     "window_id": window_id,
-                    "include_accessibility_tree": True,
+                    "include_accessibility_tree": include_elements,
                     "include_screenshot": True,
                 })
                 structured = self._structured(result)
-                score = int(structured.get("total_element_count", 0))
+                score = int(structured.get("total_element_count", 0)) if include_elements else 0
                 image_size = len(self.extract_image_b64(result) or "")
                 title = str(window.get("title", "")).casefold()
                 modal = int(title in FILE_DIALOG_TITLES or title.startswith("blob:"))
@@ -274,7 +284,7 @@ class CuaDriverClient:
                 candidates, key=lambda item: (item[0], item[1], item[2])
             )
             self._snapshot_id = structured.get("snapshot_id")
-            self._last_elements = structured.get("elements", [])
+            self._last_elements = structured.get("elements", []) if include_elements else []
             self._capture_meta = structured
             bounds = structured.get("window_bounds", {})
             width = structured.get("screenshot_width")
@@ -292,10 +302,17 @@ class CuaDriverClient:
                 }
             return result
 
-        args: dict = {"action": "capture", "mode": mode} if tool == "computer_use" else {}
+        args: dict = ({"action": "capture", "mode": "som" if include_elements else "screenshot"}
+                      if tool == "computer_use" else {})
         if app:
             args["app"] = app
-        return await self._call(tool, args)
+        result = await self._call(tool, args)
+        if include_elements:
+            structured = self._structured(result)
+            self._last_elements = structured.get("elements", [])
+            self._snapshot_id = structured.get("snapshot_id")
+            self._capture_meta = structured
+        return result
 
     async def _validate_capture_window(self, capture: dict[str, Any]) -> None:
         """Check the exact captured window without moving or capturing it."""
