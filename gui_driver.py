@@ -15,6 +15,7 @@ import math
 import threading
 import time
 from concurrent.futures import Future
+from copy import deepcopy
 from typing import Any
 
 from puda import command
@@ -217,10 +218,11 @@ class GuiDriver:
 
     @command
     def capture_screenshot(self, include_elements: bool = False) -> dict:
-        """Return a PNG and a single-use capture_id for coordinate clicks.
+        """Return a PNG and a copied capture context for coordinate clicks.
 
-        capture_id is None when the backend cannot provide window identity and
-        geometry. Any later capture or input invalidates the ID.
+        capture is None when the backend cannot provide window identity and
+        geometry. Pass capture["capture_id"] to click_at; any later capture or
+        input invalidates the ID.
         Set include_elements=True to refresh accessibility elements as well.
         """
         result = self._run(self._cua.capture(
@@ -233,10 +235,7 @@ class GuiDriver:
                 "Ensure the app is visible and screen capture is permitted."
             )
         self._last_status = {"captured_at": time.time()}
-        capture = getattr(self._cua, "_coordinate_capture", None) or {}
-        return {"image_b64": img,
-                "capture_id": capture.get("capture_id"),
-                "width": capture.get("width"), "height": capture.get("height")}
+        return {"image_b64": img, "capture": deepcopy(self._cua._coordinate_capture)}
 
     @command
     def get_elements(self) -> dict:

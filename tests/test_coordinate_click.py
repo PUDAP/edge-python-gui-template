@@ -152,12 +152,26 @@ class CoordinateCommandTests(unittest.TestCase):
             capture=mock.AsyncMock(return_value=SimpleNamespace(
                 content=[SimpleNamespace(type="image", data="PNG")],
             )),
-            _coordinate_capture={"capture_id": "capture", "width": 200, "height": 100},
+            _coordinate_capture={"capture_id": "capture", "width": 200, "height": 100,
+                                 "pid": 1, "window_id": 2,
+                                 "bounds": {"x": 10, "y": 20, "width": 200, "height": 100}},
             click_at=mock.AsyncMock(return_value=SimpleNamespace(structuredContent={"effect": "ok"})),
         )
-        self.assertEqual(d.capture_screenshot()["capture_id"], "capture")
+        screenshot = d.capture_screenshot()
+        self.assertEqual(set(screenshot), {"image_b64", "capture"})
+        self.assertEqual(screenshot["capture"], d._cua._coordinate_capture)
+        screenshot["capture"]["capture_id"] = "modified"
+        screenshot["capture"]["bounds"]["x"] = 999
+        self.assertEqual(d._cua._coordinate_capture["capture_id"], "capture")
+        self.assertEqual(d._cua._coordinate_capture["bounds"]["x"], 10)
         d._cua.capture.reset_mock()
         result = d.click_at(5, 6, "capture")
         d._cua.capture.assert_not_awaited()
         d._cua.click_at.assert_awaited_once_with(x=5, y=6, capture_id="capture")
         self.assertNotIn("image_b64", result)
+
+    def test_screenshot_without_coordinate_context_returns_null_capture(self):
+        d = make_driver(capture=mock.AsyncMock(return_value=SimpleNamespace(
+            content=[SimpleNamespace(type="image", data="PNG")],
+        )))
+        self.assertEqual(d.capture_screenshot(), {"image_b64": "PNG", "capture": None})

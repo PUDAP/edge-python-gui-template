@@ -23,7 +23,7 @@ def make_driver(**cua_attrs) -> GuiDriver:
     d.target_app = "Demo"
     d._last_status = {}
     d._run = lambda coro: asyncio.run(coro)
-    d._cua = SimpleNamespace(**cua_attrs)
+    d._cua = SimpleNamespace(**{"_coordinate_capture": None, **cua_attrs})
     return d
 
 

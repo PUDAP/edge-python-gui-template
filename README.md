@@ -138,7 +138,7 @@ docker compose -f compose.yml up -d --build
 
 | Command | Description |
 |---|---|
-| `capture_screenshot` | Return a PNG, dimensions, and a single-use `capture_id` |
+| `capture_screenshot` | Return `image_b64` and a copied `capture` context (or null) |
 | `get_elements` | Inspect current accessibility elements, labels, and roles |
 | `find_element` | Find one enabled exact label/role match; reject ambiguity |
 | `click_element` | Resolve and click one exact label/role match from a fresh capture |
@@ -166,9 +166,9 @@ puda machine run my-instrument press_key --keys "ctrl+s"
 
 Machine commands call the public methods directly: `find_element`, `click_element`, and `capture_screenshot(include_elements=False)`. The redundant private wrappers have been removed. Use `capture_screenshot()["image_b64"]` when only the PNG is needed.
 
-Command and screenshot telemetry responses omit the configured app name. `capture_screenshot` returns `image_b64`, `capture_id`, `width`, and `height`; `get_elements` returns `elements`. The configured `target_app` remains in machine state for diagnostics.
+Command responses omit the configured app name. `capture_screenshot` returns `image_b64` and `capture`; `get_elements` returns `elements`. The configured `target_app` remains in machine state for diagnostics. The copied `capture` context contains `capture_id`, `pid`, `window_id`, `bounds` (window x/y/width/height), and screenshot pixel `width`/`height`.
 
-`click_at(x, y, capture_id)` now requires the ID returned alongside the screenshot used to choose coordinates. The ID is single-use and invalidated by subsequent captures or input. The client verifies the exact window's identity, visibility, and bounds before and after foregrounding it; it does not reposition the window or recapture. Call `capture_screenshot` separately for post-click feedback. If capture metadata or native targeted input is unavailable, `capture_id` is null and coordinate clicks are unavailable. These checks cannot detect changed content inside an otherwise unchanged window or prevent an external change between validation and dispatch.
+`click_at(x, y, capture_id)` requires `result["capture"]["capture_id"]` from the screenshot used to choose coordinates. The ID is single-use and invalidated by subsequent captures or input. The client verifies the exact window's identity, visibility, and bounds before and after foregrounding it; it does not reposition the window or recapture. Call `capture_screenshot` separately for post-click feedback. If capture metadata or native targeted input is unavailable, `capture` is null and coordinate clicks are unavailable. These checks cannot detect changed content inside an otherwise unchanged window or prevent an external change between validation and dispatch.
 
 `capture_screenshot` replaces both `status` and `ask_screen`; interpret images in the calling agent. Replace `find_and_click(description)` with `click_element(label, role)` using exact, case-sensitive values from `get_elements`. Replace `type_text(text, field_description)` with separate `click_element` and `type_text` calls. Machine helpers now use `click_element(label, role)` instead of the former fuzzy helper.
 
