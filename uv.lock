@@ -380,7 +380,7 @@ wheels = [
 ]
 
 [[package]]
-name = "puda-guidriver"
+name = "edge-gui-python-template"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
