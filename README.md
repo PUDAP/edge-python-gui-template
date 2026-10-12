@@ -23,9 +23,7 @@ edge-gui-python-template/
 ├── tests/            # offline tests for the generic logic
 ├── .env.example      # environment variable template
 ├── start_edge.bat    # Windows launcher
-├── start_edge.sh     # Linux launcher
-├── Dockerfile        # container build (optional)
-└── compose.yml       # docker compose (optional)
+└── start_edge.sh     # Linux launcher
 ```
 
 ---
@@ -121,6 +119,8 @@ xwininfo -root -tree | grep '"'
 
 ## Run
 
+Run the edge directly on the instrument's desktop host, in the same interactive desktop session as the target application. The agent can connect remotely through PUDA; desktop automation runs on this host.
+
 ```bash
 # Windows
 .\start_edge.bat
@@ -128,8 +128,6 @@ xwininfo -root -tree | grep '"'
 ./start_edge.sh
 # Or directly
 uv run python main.py
-# Or with Docker
-docker compose -f compose.yml up -d --build
 ```
 
 ---
