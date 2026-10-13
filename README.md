@@ -134,9 +134,11 @@ uv run python main.py
 
 ## GUI operations and remote commands
 
-`driver.py` starts with an explicit constructor calling `super().__init__(target_app=target_app)`, followed by high-level machine commands and then low-level GUI commands. The high-level section contains workflows such as `import_file`, including preconditions and completion checks. The low-level section contains thin delegates for inspection and individual actions. Add new instrument workflows to the high-level section.
+`driver.py` exposes the high-level `import_file` example and `capture_screenshot`, its only low-level remote command. Add instrument workflows to the high-level section, including preconditions and completion checks.
 
-`GuiDriver` has no `@command` decorators. Its methods below are ordinary Python operations available to machine code. The example `Driver` explicitly exposes all of them through decorated overrides, alongside `import_file`. This lets an agent inspect the live GUI, test individual steps, and build high-level machine commands with verified completion. Adapt the import workflow's labels and completion checks before using it. Remove any decorated overrides that a deployed machine does not need; the inherited Python operations remain available internally.
+`GuiDriver` has no `@command` decorators. Its operations remain inherited Python helpers for composing machine workflows. Element lookup, waiting, clicking, typing, scrolling, field editing, and key presses are not remote commands. Use screenshots with `include_elements=True` to inspect the app, then encode actions in high-level workflows. Adapt the import example's labels and completion checks before using it.
+
+The following table lists Python operations; only `capture_screenshot` is exposed as a low-level remote command.
 
 | Python operation | Description |
 |---|---|
@@ -157,9 +159,6 @@ Constructing `Driver` connects the MCP client. `main.py` calls internal `_close(
 ```bash
 puda machine run my-instrument capture_screenshot
 puda machine run my-instrument capture_screenshot --include_elements true
-puda machine run my-instrument find_element --label "Import"
-puda machine run my-instrument click_element --label "Import"
-puda machine run my-instrument wait_for_element --label "Browse" --timeout 15
 # After adapting the example workflow to your instrument:
 puda machine run my-instrument import_file --file_path "/path/on/desktop/method.xml" --success_label "Loaded method.xml"
 ```
@@ -182,7 +181,7 @@ Matching considers enabled elements only. Missing or duplicate matches raise bef
 
 1. **Copy the template** and install: `git clone … my-machine-guidriver && cd my-machine-guidriver && uv sync`.
 2. **Set `.env`**: `MACHINE_ID`, `NATS_SERVERS`, `TARGET_APP`.
-3. **Add the machine's commands** to `Driver` in `driver.py` and decorate them with `@command`. It subclasses `GuiDriver` and explicitly publishes its public operations through decorated overrides. The private file-dialog helper remains internal. Build machine commands from these operations:
+3. **Add the machine's commands** to `Driver` in `driver.py` and decorate them with `@command`. It subclasses `GuiDriver`; `capture_screenshot` is the only low-level decorated override. GUI input and file-dialog helpers remain internal Python operations. Build machine commands from these operations:
 
    | Helper | Use |
    |---|---|

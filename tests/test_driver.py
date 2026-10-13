@@ -433,11 +433,13 @@ class CommandSurfaceTests(unittest.TestCase):
     def test_only_explicit_machine_commands_are_remote(self):
         self.assertEqual(
             resolve_command_names(object.__new__(Driver)),
-            {"capture_screenshot", "find_element", "wait_for_element",
-             "click_element", "set_value", "type_text", "scroll", "press_key",
-             "click_at", "import_file"},
+            {"capture_screenshot", "import_file"},
         )
         self.assertEqual(resolve_command_names(object.__new__(GuiDriver)), set())
+        for name in ("find_element", "wait_for_element", "click_element", "set_value",
+                     "type_text", "scroll", "press_key", "click_at"):
+            with self.subTest(helper=name):
+                self.assertIs(getattr(Driver, name), getattr(GuiDriver, name))
 
     def test_example_import_composes_gui_operations(self):
         d = make_driver()

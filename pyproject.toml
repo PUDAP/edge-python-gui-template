@@ -1,5 +1,6 @@
 [project]
 name = "edge-python-gui-template"
+authors = [{ name = "zhao" }]
 version = "0.1.0"
 description = "PUDA GUI driver template — controls any desktop instrument software via Hermes computer use (cua-driver MCP), on Windows or Linux (X11)"
 readme = "README.md"
