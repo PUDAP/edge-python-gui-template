@@ -14,6 +14,7 @@ import logging
 import math
 import threading
 import time
+from collections import deque
 from concurrent.futures import Future
 from copy import deepcopy
 from typing import Any
@@ -121,6 +122,32 @@ class GuiDriver:
             self._loop_thread.join()
 
     # ── generic GUI helpers ────────────────────────────────────────────────
+
+    @staticmethod
+    def _children_by_parent(elements: list[dict]) -> dict[int | None, list[dict]]:
+        """Index a snapshot's children while preserving accessibility order."""
+        children = {}
+        for element in elements:
+            children.setdefault(element.get("parent_index"), []).append(element)
+        return children
+
+    @staticmethod
+    def _descendants(
+        children: dict[int | None, list[dict]], root: int, error: str
+    ) -> list[dict]:
+        """Walk snapshot descendants breadth-first, rejecting repeated nodes."""
+        result = []
+        pending = deque(children.get(root, []))
+        visited = {root}
+        while pending:
+            element = pending.popleft()
+            index = element["element_index"]
+            if index in visited:
+                raise RuntimeError(error)
+            visited.add(index)
+            result.append(element)
+            pending.extend(children.get(index, []))
+        return result
 
     def _validate_element_position(self, element: dict[str, Any], description: str) -> None:
         """Reject accessibility coordinates outside the captured window."""
