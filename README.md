@@ -5,7 +5,7 @@ A template for PUDA edge services that integrate **any desktop instrument softwa
 | Layer | Technology | Role |
 |---|---|---|
 | GUI automation | [Hermes computer use](https://hermes-agent.nousresearch.com/docs/user-guide/features/computer-use) → `cua-driver` MCP | Capture the app and dispatch accessibility / keyboard / mouse actions |
-| PUDA integration | `puda==0.0.20` `EdgeRunner` + NATS | Expose allowlisted commands and machine state to the PUDA platform |
+| PUDA integration | `puda==0.0.21` `EdgeRunner` + NATS | Expose allowlisted commands and machine state to the PUDA platform |
 
 There is **no LLM**: screens are returned as raw base64 PNG, and the driver selects elements by exact, case-sensitive accessibility labels and optional roles.
 
@@ -111,7 +111,7 @@ The key file must be writable to persist key rotations. Leave both empty or
 commented out for plaintext `nats://` connections. Invalid configured files fail
 before connecting.
 
-The template uses SDK 0.0.20 from PyPI. Run `uv sync --locked` to install
+The template uses SDK 0.0.21 from PyPI. Run `uv sync --locked` to install
 the locked dependencies.
 
 ### Finding the TARGET_APP name

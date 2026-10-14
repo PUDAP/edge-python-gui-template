@@ -7,7 +7,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     # PUDA edge framework
-    "puda==0.0.20",
+    "puda==0.0.21",
     # Settings / config
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",

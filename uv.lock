@@ -209,7 +209,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "mcp", specifier = ">=1.0.0" },
-    { name = "puda", specifier = "==0.0.20" },
+    { name = "puda", specifier = "==0.0.21" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
@@ -388,7 +388,7 @@ wheels = [
 
 [[package]]
 name = "puda"
-version = "0.0.20"
+version = "0.0.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -396,9 +396,9 @@ dependencies = [
     { name = "psutil" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f3/cc/82bd54ef97d9a8181849e3187a7817a76d69289c323b4f7e063abac37a64/puda-0.0.20.tar.gz", hash = "sha256:f174b6ed75c8c0f52504de536744bbce43c64ae037b6be9d1cd4495827f365dc", size = 48542, upload-time = "2026-10-14T07:53:51.376Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/29/54/e3416df93e269db13963347711f319da355e2636700c825bfaf88ba479df/puda-0.0.21.tar.gz", hash = "sha256:5a3cb7976d62a31c96f7bfd5b1ca8c79baf0549170bbcbb46687ea00dd8668ea", size = 48580, upload-time = "2026-10-14T08:01:11.128Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d6/3f/8e3de0d2a1a149d97c07bfca80541327705c8e29f4b325a3d475b062ee49/puda-0.0.20-py3-none-any.whl", hash = "sha256:23f0e905509979e0cfa55645064c8d9e9ca332e7f7915f6b76bf973005037e6c", size = 53979, upload-time = "2026-10-14T07:53:49.455Z" },
+    { url = "https://files.pythonhosted.org/packages/25/ad/edd799ac789324b6660042f5d1c2c4315367c1affbf15c7d755bdb5abdd3/puda-0.0.21-py3-none-any.whl", hash = "sha256:81f29eadeef0887792ff8edf582638b7d6dec0324ef669ae059fd6b0deac2473", size = 53949, upload-time = "2026-10-14T08:01:09.368Z" },
 ]
 
 [[package]]
