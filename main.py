@@ -67,6 +67,9 @@ class Config(BaseSettings):
         )
     )
 
+    puda_nats_ca: str = ""
+    puda_e2e_key_file: str = ""
+
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parent / ".env",
         env_file_encoding="utf-8",
@@ -106,6 +109,8 @@ async def main() -> None:
         edge_nats_client = EdgeNatsClient(
             servers=config.nats_server_list,
             machine_id=config.machine_id,
+            ca_file=config.puda_nats_ca,
+            e2e_key_file=config.puda_e2e_key_file,
         )
 
         runner = EdgeRunner(

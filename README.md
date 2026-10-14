@@ -5,7 +5,7 @@ A template for PUDA edge services that integrate **any desktop instrument softwa
 | Layer | Technology | Role |
 |---|---|---|
 | GUI automation | [Hermes computer use](https://hermes-agent.nousresearch.com/docs/user-guide/features/computer-use) → `cua-driver` MCP | Capture the app and dispatch accessibility / keyboard / mouse actions |
-| PUDA integration | `puda==0.0.18` `EdgeRunner` + NATS | Expose allowlisted commands and machine state to the PUDA platform |
+| PUDA integration | `puda==0.0.19` `EdgeRunner` + NATS | Expose allowlisted commands and machine state to the PUDA platform |
 
 There is **no LLM**: screens are returned as raw base64 PNG, and the driver selects elements by exact, case-sensitive accessibility labels and optional roles.
 
@@ -102,6 +102,18 @@ cp .env.example .env        # Windows: Copy-Item .env.example .env
 | `TARGET_APP` | Window title (or a unique part of it) of the instrument software |
 | `PUDA_NATS_CA` | Optional CA file path when NATS E2EE is set up |
 | `PUDA_E2E_KEY_FILE` | Optional shared key file path when NATS E2EE is set up |
+
+For NATS E2EE, set both `PUDA_NATS_CA` and `PUDA_E2E_KEY_FILE` to existing
+absolute file paths on the desktop host and use a `tls://` server URL.
+Startup passes these paths directly into `EdgeNatsClient`. TLS-only connections
+can use a CA without a key; payload encryption can also be configured independently.
+The key file must be writable to persist key rotations. Leave both empty or
+commented out for plaintext `nats://` connections. Invalid configured files fail
+before connecting.
+
+The uv source pins the SDK Git revision containing this API, still versioned
+0.0.19. The existing PyPI 0.0.19 predates this API and cannot be replaced.
+Use `uv sync --locked` with Git installed to obtain the pinned SDK.
 
 ### Finding the TARGET_APP name
 

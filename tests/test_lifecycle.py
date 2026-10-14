@@ -59,7 +59,7 @@ class DriverLifecycleTests(unittest.TestCase):
 class MainCleanupTests(unittest.IsolatedAsyncioTestCase):
     async def test_cleanup_on_return_connect_failure_run_failure_and_cancellation(self):
         config = SimpleNamespace(machine_id="demo", target_app="Demo", nats_servers="nats://test",
-                                 nats_server_list=["nats://test"])
+                                 nats_server_list=["nats://test"], puda_nats_ca="", puda_e2e_key_file="")
         for stage in ("return", "connect", "run", "cancel"):
             with self.subTest(stage=stage):
                 driver = mock.Mock()
