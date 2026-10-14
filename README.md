@@ -100,6 +100,8 @@ cp .env.example .env        # Windows: Copy-Item .env.example .env
 | `MACHINE_ID` | Unique PUDA machine ID, e.g. `hplc-1` |
 | `NATS_SERVERS` | NATS cluster URLs |
 | `TARGET_APP` | Window title (or a unique part of it) of the instrument software |
+| `PUDA_NATS_CA` | Optional CA file path when NATS E2EE is set up |
+| `PUDA_E2E_KEY_FILE` | Optional shared key file path when NATS E2EE is set up |
 
 ### Finding the TARGET_APP name
 
