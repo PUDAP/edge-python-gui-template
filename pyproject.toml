@@ -1,6 +1,3 @@
-[tool.uv.sources]
-puda = { git = "https://github.com/PUDAP/puda.git", rev = "cf42ae01c8b976abd83dacb629909b4f539489e0", subdirectory = "libs/python-sdk" }
-
 [project]
 name = "edge-python-gui-template"
 authors = [{ name = "zhao" }]
@@ -10,7 +7,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     # PUDA edge framework
-    "puda==0.0.19",
+    "puda==0.0.20",
     # Settings / config
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",

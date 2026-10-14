@@ -209,7 +209,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "mcp", specifier = ">=1.0.0" },
-    { name = "puda", git = "https://github.com/PUDAP/puda.git?subdirectory=libs%2Fpython-sdk&rev=cf42ae01c8b976abd83dacb629909b4f539489e0" },
+    { name = "puda", specifier = "==0.0.20" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
@@ -388,13 +388,17 @@ wheels = [
 
 [[package]]
 name = "puda"
-version = "0.0.19"
-source = { git = "https://github.com/PUDAP/puda.git?subdirectory=libs%2Fpython-sdk&rev=cf42ae01c8b976abd83dacb629909b4f539489e0#cf42ae01c8b976abd83dacb629909b4f539489e0" }
+version = "0.0.20"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "nats-py" },
     { name = "psutil" },
     { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f3/cc/82bd54ef97d9a8181849e3187a7817a76d69289c323b4f7e063abac37a64/puda-0.0.20.tar.gz", hash = "sha256:f174b6ed75c8c0f52504de536744bbce43c64ae037b6be9d1cd4495827f365dc", size = 48542, upload-time = "2026-10-14T07:53:51.376Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d6/3f/8e3de0d2a1a149d97c07bfca80541327705c8e29f4b325a3d475b062ee49/puda-0.0.20-py3-none-any.whl", hash = "sha256:23f0e905509979e0cfa55645064c8d9e9ca332e7f7915f6b76bf973005037e6c", size = 53979, upload-time = "2026-10-14T07:53:49.455Z" },
 ]
 
 [[package]]
